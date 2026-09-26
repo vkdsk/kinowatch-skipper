@@ -12,7 +12,7 @@
 <br />
 
 ### 🚀 [НАЖМИТЕ СЮДА ДЛЯ АВТО-УСТАНОВКИ](https://kw.xlnt.ovh/kino-skipper.user.js)
-*(Требуется установленный менеджер юзерскриптов, например Tampermonkey)*
+*(Требуется установленный менеджер юзерскриптов, например Tampermonkey(https://www.tampermonkey.net/)*
 
 </div>
 
