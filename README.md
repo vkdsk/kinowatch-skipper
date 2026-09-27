@@ -39,6 +39,8 @@
 
 <div align="center">
 
+### Кнопки и меню
+
 | Кнопка «Пропустить заставку» | Кнопка «Отмена пропуска» |
 | :---: | :---: |
 | ![Демонстрация кнопки пропустить заставку](https://github.com/user-attachments/assets/d18e20fc-618b-4a9f-b9eb-8f7639082ab3) | ![Демонстрация кнопки отмена пропуска](https://github.com/user-attachments/assets/e17b268e-c0f9-44db-b6ca-76c514cad922) |
