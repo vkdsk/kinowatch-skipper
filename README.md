@@ -35,6 +35,31 @@
 
 ---
 
+## 📸 Скриншоты 
+
+<div align="center">
+
+| Кнопка «Пропустить заставку» | Кнопка «Отмена пропуска» |
+| :---: | :---: |
+| ![Демонстрация кнопки пропустить заставку](https://github.com/user-attachments/assets/d18e20fc-618b-4a9f-b9eb-8f7639082ab3) | ![Демонстрация кнопки отмена пропуска](https://github.com/user-attachments/assets/e17b268e-c0f9-44db-b6ca-76c514cad922) |
+
+| Кнопка «Настройки» | Меню настроек |
+| :---: | :---: |
+| ![Демонстрация кнопки настройки](https://github.com/user-attachments/assets/0b605cec-16f8-4a48-aa38-eca8f6d1b1f4) | ![Меню настроек](https://github.com/user-attachments/assets/26121f20-a7d2-4f60-adc5-495023aec30e) |
+
+### Процесс обрезки заставки
+
+| 1. Кнопка «Обрезать заставку» | 2. Начало обрезки | 3. Завершение обрезки |
+| :---: | :---: | :---: |
+| ![Демонстрация кнопки обрезать заставку](https://github.com/user-attachments/assets/0ae24a4a-25ea-4b50-b564-00d9b0913296) | ![Начало обрезки](https://github.com/user-attachments/assets/fb09d79e-09ea-4923-945a-a73c895aba5f) | ![Завершение обрезки](https://github.com/user-attachments/assets/67bdaf44-e588-4d45-b8b8-e98b0faa4830) |
+
+### Уведомление о принятии отметки
+![Заявка принята](https://github.com/user-attachments/assets/1e3129e3-ac66-4af0-9b49-b0d866357c6a)
+
+</div>
+
+---
+
 ## 📥 Быстрая установка
 
 1. Установите расширение **[Tampermonkey](https://www.tampermonkey.net/)** для вашего браузера.
