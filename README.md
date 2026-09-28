@@ -6,7 +6,7 @@
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-Supported-052e40?style=for-the-badge&logo=tampermonkey)](https://www.tampermonkey.net/)
 [![Violentmonkey](https://img.shields.io/badge/Violentmonkey-Supported-3273dc?style=for-the-badge)](https://violentmonkey.github.io/)
-[![Version](https://img.shields.io/badge/version-1.18.3-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
+[![Version](https://img.shields.io/badge/version-1.19.0-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
 
 <br />
 
@@ -30,6 +30,7 @@
 - ⚙️ **Настройка автопропуска:** При нажатии на кнопку настройки можно отключить и изменить таймер перемотки.
 - 🛑 **Кнопка отмены:** Если вы не хотите пропускать заставку в конкретной серии — его можно отменить в один клик.
 - 🎯 **Краудсорсинг меток (Opt-In):** Кнопка отправки заставки доступна только для пользователей, которые еще не отправляли сегмент заставки для пропуска.
+- ⏭️ **Посекундная перемотка:** При старте обрезки заставки/титров появляются кнопки для посекундной перемотки.
 - 🛡 **Умная валидация:** Защита от случайных кликов — скрипт и сервер отклоняют отрезки короче 10 секунд и длиннее 5 минут.
 - 🎨 **Кастомный UI:** Всплывающие стилизованные уведомления (Toast) о принятых отметках и ошибках.
 
