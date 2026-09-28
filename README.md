@@ -6,7 +6,7 @@
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-Supported-052e40?style=for-the-badge&logo=tampermonkey)](https://www.tampermonkey.net/)
 [![Violentmonkey](https://img.shields.io/badge/Violentmonkey-Supported-3273dc?style=for-the-badge)](https://violentmonkey.github.io/)
-[![Version](https://img.shields.io/badge/version-1.19.0-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
+[![Version](https://img.shields.io/badge/version-1.19.1-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
 
 <br />
 
@@ -101,6 +101,7 @@
 ## 🤔 Какие данные собираются?
 
 * **Ник:** шифруется на стороне пользователя и зашифрованный ник отправляется в нашу базу данных.
+* **URL:** берёт url фильма из адресной строки и отправляет в базу для ручной модерации.
 * **Временные метки:** метки заставки/титров, отправленные пользователем, без шифрования отправляются в нашу базу данных.
 
 ---
@@ -114,6 +115,5 @@
 ---
 
 <div align="center">
-  <sub>Сделано с любовью для удобно
-    го просмотра 🍿</sub>
+  <sub>Сделано с любовью для друзей из кинопаба🍿</sub>
 </div>
