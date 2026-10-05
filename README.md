@@ -4,9 +4,11 @@
 
 **Автоматический пропуск и удобная отметка заставок/титров в плеере kino.watch**
 
+**Более 140 тысяч фильмов и сериалов уже добавлены!**
+
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-Supported-052e40?style=for-the-badge&logo=tampermonkey)](https://www.tampermonkey.net/)
 [![Violentmonkey](https://img.shields.io/badge/Violentmonkey-Supported-3273dc?style=for-the-badge)](https://violentmonkey.github.io/)
-[![Version](https://img.shields.io/badge/version-1.19.5-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
+[![Version](https://img.shields.io/badge/version-1.20.0-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
 
 <br />
 
@@ -113,14 +115,7 @@
 
 ---
 
-## 🌐 Стек технологий
-
-* **Client:** JavaScript (ES6+), Tampermonkey / UserScript API, GM_xmlhttpRequest, Custom CSS
-* **Server:** PHP 8.x, PDO, MySQL/MariaDB
-
----
-
-## 🤔 Какие данные собираются?
+## 🤔 Какие данные собираются при отправке сегментов?
 
 * **Ник:** шифруется на стороне пользователя и зашифрованный ник отправляется в нашу базу данных.
 * **URL:** берёт url фильма из адресной строки и отправляет в базу для ручной модерации.
@@ -128,7 +123,7 @@
 
 ---
 
-## 📋 ToDo
+## 📋 ToDo (задачки со звёздочкой)
 
 * **Кнопки:** Сделать кнопки "пропустить заставку/титры" и "отменить пропуск" всегда активными, а не скрывать вместе со скрытием интерфейса плеера.
 * **Настройки:** Добавить выбор скрывать кнопки "пропустить заставку/титры" и "отменить пропуск" вместе с интерфейсом плеера или нет.
