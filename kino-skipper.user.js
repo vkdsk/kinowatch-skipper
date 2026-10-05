@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Kino.watch Skipper
 // @namespace    https://github.com/vkdsk/kinowatch-skipper
-// @version      1.19.5
-// @description  Пропуск заставок и титров в плеере kino.watch
+// @version      1.20.0
+// @description  Пропуск заставок и титров в плеере kino.watch (с поддержкой fallback API)
 // @author       etodsk
 // @match        https://*.kino.watch/*
 // @icon         https://m.staticpop.net/logo.png
@@ -15,11 +15,15 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @connect      kw.xlnt.ovh
+// @connect      api.introdb.app
+// @connect      api.skipdb.tv
+// @connect      api.theintrodb.org
 // @run-at       document-idle
 // @require      https://cdnjs.cloudflare.com/ajax/libs/blueimp-md5/2.19.0/js/md5.min.js
 // ==/UserScript==
 (function() {
     'use strict';
+
     const SETTINGS = {
         get autoSkipIntro() {
             return GM_getValue('autoSkipIntro', true);
@@ -58,6 +62,7 @@
             GM_setValue('outroShowPercent', Math.min(100, Math.max(1, parseInt(val, 10) || 15)));
         }
     };
+
     GM_addStyle(`
         .player-bottom .kino-skip-controls {
             display: inline-flex !important;
@@ -181,11 +186,11 @@
             100% { opacity: 1; }
         }
         .kino-skip-modal-overlay {
-            position: fixed !important;
+            position: absolute !important;
             top: 0 !important;
             left: 0 !important;
-            width: 100vw !important;
-            height: 100vh !important;
+            width: 100% !important;
+            height: 100% !important;
             background: rgba(0, 0, 0, 0.85);
             display: flex;
             justify-content: center;
@@ -194,18 +199,34 @@
             backdrop-filter: blur(6px);
             pointer-events: auto;
             box-sizing: border-box;
+            padding: 10px;
         }
         .kino-skip-modal {
             background: #1e1e24;
             color: #fff;
-            padding: 20px 24px;
+            padding: 16px 18px 12px 18px;
             border-radius: 12px;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
-            max-width: 440px;
-            width: 92%;
-            text-align: center;
+            width: 100%;
+            max-width: 420px;
+            max-height: 95%;
+            display: flex;
+            flex-direction: column;
             font-family: system-ui, -apple-system, sans-serif;
-            z-index: 2147483647 !important;
+            box-sizing: border-box;
+        }
+        .kino-skip-modal-body {
+            overflow-y: auto;
+            flex: 1 1 auto;
+            padding-right: 4px;
+            margin-bottom: 8px;
+        }
+        .kino-skip-modal-body::-webkit-scrollbar {
+            width: 4px;
+        }
+        .kino-skip-modal-body::-webkit-scrollbar-thumb {
+            background: #4a4d52;
+            border-radius: 4px;
         }
         .kino-skip-modal h3 { margin: 0 0 12px 0; font-size: 18px; color: #fff; }
         .kino-skip-modal p { margin: 0 0 16px 0; font-size: 14px; color: #ccc; line-height: 1.4; }
@@ -251,7 +272,14 @@
             font-size: 13px;
             text-align: center;
         }
-        .kino-skip-modal-actions { display: flex; gap: 12px; justify-content: center; margin-top: 16px; }
+        .kino-skip-modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            padding-top: 8px;
+            border-top: 1px solid #2b2b36;
+            flex-shrink: 0;
+        }
         .kino-modal-btn {
             padding: 8px 18px;
             border: none;
@@ -289,6 +317,7 @@
             100% { opacity: 0; transform: translateY(-10px); }
         }
     `);
+
     const API_URL = 'https://kw.xlnt.ovh/index.php';
     let currentMediaId = null;
     let currentUsername = null;
@@ -299,19 +328,15 @@
     let markStartTime = null;
     let activeMarkingType = null;
     let isAutoSkipCancelled = false;
-    function showToast(playerElement, message, type = 'success') {
-        if (!playerElement) return;
-        const toast = document.createElement('div');
-        toast.className = `kino-toast-notification ${type}`;
-        toast.innerText = message;
-        playerElement.appendChild(toast);
-        setTimeout(() => toast.remove(), 3500);
-    }
+
+    // Вспомогательные функции отправки запросов с таймаутом
     function sendApiRequest(url, options = {}) {
+        const timeoutMs = options.timeout || 15000;
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: options.method || 'GET',
                 url: url,
+                timeout: timeoutMs,
                 headers: {
                     'Accept': 'application/json, text/plain, */*',
                     'Content-Type': 'application/json',
@@ -335,15 +360,228 @@
                         reject({ status: response.status, message: errorMsg, data });
                     }
                 },
+                ontimeout: () => reject({ status: 408, message: 'Превышено время ожидания (15 с)' }),
                 onerror: () => reject({ status: 0, message: 'Сетевая ошибка' })
             });
         });
     }
+
+    // Извлечение IMDb ID из ссылок на странице
+    function getImdbId() {
+        const links = document.querySelectorAll('a[href*="imdb.com/title/"]');
+        for (const link of links) {
+            const match = link.href.match(/title\/(tt\d+)/);
+            if (match && match[1]) return match[1];
+        }
+        return null;
+    }
+
+    // Извлечение сезона и серии из текущего URL
+    function parseSeasonEpisode() {
+        const match = window.location.pathname.match(/\/s(\d+)e(\d+)/i);
+        if (!match) return { isMovie: false, season: null, episode: null };
+
+        const season = parseInt(match[1], 10);
+        const episode = parseInt(match[2], 10);
+
+        if (season === 0) {
+            return { isMovie: true, season: null, episode: null };
+        }
+        return { isMovie: false, season, episode };
+    }
+
+    // Ожидание и получение длительности видео в миллисекундах
+    function getVideoDurationMs(playerElement) {
+        return new Promise((resolve) => {
+            const checkDuration = () => {
+                const nativeVideo = playerElement.querySelector('video');
+                let durSec = 0;
+                if (nativeVideo && !isNaN(nativeVideo.duration) && nativeVideo.duration > 0) {
+                    durSec = nativeVideo.duration;
+                } else if (playerElement.duration && !isNaN(playerElement.duration) && playerElement.duration > 0) {
+                    durSec = playerElement.duration;
+                }
+
+                if (durSec > 0) {
+                    resolve(Math.round(durSec * 1000));
+                    return true;
+                }
+                return false;
+            };
+
+            if (checkDuration()) return;
+
+            const nativeVideo = playerElement.querySelector('video');
+            const onLoaded = () => {
+                if (checkDuration()) {
+                    if (nativeVideo) nativeVideo.removeEventListener('loadedmetadata', onLoaded);
+                }
+            };
+
+            if (nativeVideo) {
+                nativeVideo.addEventListener('loadedmetadata', onLoaded);
+            }
+
+            // Таймаут безопасности для определения длительности (3 секунды)
+            setTimeout(() => {
+                checkDuration();
+                if (nativeVideo) nativeVideo.removeEventListener('loadedmetadata', onLoaded);
+                resolve(0);
+            }, 3000);
+        });
+    }
+
+    // Вспомогательный объединитель диапозонов старта и конца
+    function combineSegments(seg1, seg2) {
+        if (!seg1 && !seg2) return null;
+        if (seg1 && !seg2) return seg1;
+        if (!seg1 && seg2) return seg2;
+        return {
+            start_ms: Math.min(seg1.start_ms, seg2.start_ms),
+            end_ms: Math.max(seg1.end_ms, seg2.end_ms)
+        };
+    }
+
+    // Нормализация временного диапазона в секунды
+    function toSecondsSegment(segMs) {
+        if (!segMs || typeof segMs.start_ms !== 'number' || typeof segMs.end_ms !== 'number') {
+            return null;
+        }
+        return {
+            start_time: segMs.start_ms / 1000,
+            end_time: segMs.end_ms / 1000
+        };
+    }
+
+    // 1. Запрос к "kw.xlnt.ovh"
+    async function fetchFromKwApi(mediaId) {
+        let requestUrl = `${API_URL}?media_id=${encodeURIComponent(mediaId)}`;
+        if (currentUsername) {
+            requestUrl += `&username=${encodeURIComponent(currentUsername)}`;
+        }
+        const data = await sendApiRequest(requestUrl, { timeout: 15000 });
+        
+        return {
+            available: true,
+            can_submit_intro: Boolean(data.can_submit_intro),
+            can_submit_outro: Boolean(data.can_submit_outro),
+            intro: data.intro || null,
+            credits: data.outro || null
+        };
+    }
+
+    // 2. Запрос к "introdb"
+    async function fetchFromIntroDb(imdbId, seInfo) {
+        let url = `https://api.introdb.app/segments?imdb_id=${encodeURIComponent(imdbId)}`;
+        if (seInfo.isMovie) {
+            url += `&is_movie=true`;
+        } else {
+            url += `&season=${seInfo.season}&episode=${seInfo.episode}`;
+        }
+
+        const data = await sendApiRequest(url, { timeout: 15000 });
+
+        let introSeg = null;
+        const introObj = (data.intro && typeof data.intro.start_ms === 'number' && typeof data.intro.end_ms === 'number') ? data.intro : null;
+        const recapObj = (data.recap && typeof data.recap.start_ms === 'number' && typeof data.recap.end_ms === 'number') ? data.recap : null;
+        introSeg = combineSegments(introObj, recapObj);
+
+        let creditsSeg = null;
+        const outroObj = (data.outro && typeof data.outro.start_ms === 'number' && typeof data.outro.end_ms === 'number') ? data.outro : null;
+        const postCreditsObj = (data.post_credits && typeof data.post_credits.start_ms === 'number' && typeof data.post_credits.end_ms === 'number') ? data.post_credits : null;
+        creditsSeg = combineSegments(outroObj, postCreditsObj);
+
+        return {
+            intro: toSecondsSegment(introSeg),
+            credits: toSecondsSegment(creditsSeg)
+        };
+    }
+
+    // 3. Запрос к "skipdb"
+    async function fetchFromSkipDb(imdbId, seInfo, durationMs) {
+        let url = `https://api.skipdb.tv/api/segments?imdb_id=${encodeURIComponent(imdbId)}`;
+        if (seInfo.isMovie) {
+            if (durationMs > 0) url += `&duration=${durationMs}`;
+        } else {
+            url += `&season=${seInfo.season}&episode=${seInfo.episode}`;
+            if (durationMs > 0) url += `&duration=${durationMs}`;
+        }
+
+        const data = await sendApiRequest(url, { timeout: 15000 });
+        const segs = data.segments || {};
+
+        let introSeg = null;
+        const introObj = (segs.intro && typeof segs.intro.start_ms === 'number' && typeof segs.intro.end_ms === 'number') ? segs.intro : null;
+        const recapObj = (segs.recap && typeof segs.recap.start_ms === 'number' && typeof segs.recap.end_ms === 'number') ? segs.recap : null;
+        introSeg = combineSegments(introObj, recapObj);
+
+        let creditsSeg = null;
+        const outroObj = (segs.outro && typeof segs.outro.start_ms === 'number' && typeof segs.outro.end_ms === 'number') ? segs.outro : null;
+        const previewObj = (segs.preview && typeof segs.preview.start_ms === 'number' && typeof segs.preview.end_ms === 'number') ? segs.preview : null;
+        creditsSeg = combineSegments(outroObj, previewObj);
+
+        return {
+            intro: toSecondsSegment(introSeg),
+            credits: toSecondsSegment(creditsSeg)
+        };
+    }
+
+    // 4. Запрос к "theintrodb"
+    async function fetchFromTheIntroDb(imdbId, seInfo, durationMs) {
+        let url = `https://api.theintrodb.org/v3/media?imdb_id=${encodeURIComponent(imdbId)}`;
+        if (seInfo.isMovie) {
+            if (durationMs > 0) url += `&duration_ms=${durationMs}`;
+        } else {
+            url += `&season=${seInfo.season}&episode=${seInfo.episode}`;
+            if (durationMs > 0) url += `&duration_ms=${durationMs}`;
+        }
+
+        const data = await sendApiRequest(url, { timeout: 15000 });
+
+        const processArray = (arr1, arr2) => {
+            const list = [...(Array.isArray(arr1) ? arr1 : []), ...(Array.isArray(arr2) ? arr2 : [])];
+            let minStart = Infinity;
+            let maxEnd = -Infinity;
+
+            for (const item of list) {
+                if (item && typeof item.start_ms === 'number') {
+                    if (item.start_ms < minStart) minStart = item.start_ms;
+                }
+                if (item && typeof item.end_ms === 'number') {
+                    if (item.end_ms > maxEnd) maxEnd = item.end_ms;
+                }
+            }
+
+            if (minStart !== Infinity && maxEnd !== -Infinity && minStart < maxEnd) {
+                return { start_ms: minStart, end_ms: maxEnd };
+            }
+            return null;
+        };
+
+        const introSeg = processArray(data.intro, data.recap);
+        const creditsSeg = processArray(data.credits, data.preview);
+
+        return {
+            intro: toSecondsSegment(introSeg),
+            credits: toSecondsSegment(creditsSeg)
+        };
+    }
+
+    function showToast(playerElement, message, type = 'success') {
+        if (!playerElement) return;
+        const toast = document.createElement('div');
+        toast.className = `kino-toast-notification ${type}`;
+        toast.innerText = message;
+        playerElement.appendChild(toast);
+        setTimeout(() => toast.remove(), 3500);
+    }
+
     function formatTime(seconds) {
         const mins = Math.floor(seconds / 60);
         const secs = Math.floor(seconds % 60);
         return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
     }
+
     function getCurrentVideoTime(playerElement) {
         const nativeVideo = playerElement.querySelector('video');
         if (nativeVideo && !isNaN(nativeVideo.currentTime) && nativeVideo.currentTime > 0) {
@@ -357,6 +595,7 @@
         }
         return 0;
     }
+
     function getActiveMediaId() {
         const activeThumbnail = document.querySelector('.episode-thumbnail.active');
         if (activeThumbnail && activeThumbnail.dataset.id) return activeThumbnail.dataset.id;
@@ -375,6 +614,7 @@
         }
         return null;
     }
+
     function getWatchlistUsername() {
         const watchlistLink = document.querySelector('a[href^="/watchlist/"]');
         if (!watchlistLink) return null;
@@ -382,29 +622,89 @@
         const match = href.match(/\/watchlist\/([^/?#]+)/);
         return match ? md5(match[1]) : null;
     }
+
+    // Цепочка получение сегментов
     async function fetchSegments(mediaId, playerElement) {
         isAutoSkipCancelled = false;
         if (!currentUsername) {
             currentUsername = getWatchlistUsername();
         }
+
+        let foundIntro = null;
+        let foundCredits = null;
+        let isKwAvailable = false;
+
+        // Step 1: kw.xlnt.ovh
         try {
-            let requestUrl = `${API_URL}?media_id=${encodeURIComponent(mediaId)}`;
-            if (currentUsername) {
-                requestUrl += `&username=${encodeURIComponent(currentUsername)}`;
-            }
-            const data = await sendApiRequest(requestUrl);
-            canSubmitIntro = Boolean(data.can_submit_intro);
-            canSubmitOutro = Boolean(data.can_submit_outro);
-            currentIntro = data.intro || null;
-            currentOutro = data.outro || null;
+            const kwRes = await fetchFromKwApi(mediaId);
+            isKwAvailable = true;
+            canSubmitIntro = kwRes.can_submit_intro;
+            canSubmitOutro = kwRes.can_submit_outro;
+
+            if (kwRes.intro) foundIntro = kwRes.intro;
+            if (kwRes.credits) foundCredits = kwRes.credits;
         } catch (err) {
-            currentIntro = null;
-            currentOutro = null;
+            isKwAvailable = false;
             canSubmitIntro = false;
             canSubmitOutro = false;
         }
+
+        // Если оба сегмента получены от собственного API, не опрашиваем сторонние
+        if (foundIntro && foundCredits) {
+            currentIntro = foundIntro;
+            currentOutro = foundCredits;
+            updateMarkBtnsVisibility(playerElement);
+            return;
+        }
+
+        // Проверяем данные для сторонних API
+        const imdbId = getImdbId();
+        if (imdbId) {
+            const seInfo = parseSeasonEpisode();
+            const durationMs = await getVideoDurationMs(playerElement);
+
+            // Step 2: introdb
+            if (!foundIntro || !foundCredits) {
+                try {
+                    const res = await fetchFromIntroDb(imdbId, seInfo);
+                    if (!foundIntro && res.intro) foundIntro = res.intro;
+                    if (!foundCredits && res.credits) foundCredits = res.credits;
+                } catch (e) { /* Игнорируем ошибку */ }
+            }
+
+            // Step 3: skipdb
+            if (!foundIntro || !foundCredits) {
+                try {
+                    const res = await fetchFromSkipDb(imdbId, seInfo, durationMs);
+                    if (!foundIntro && res.intro) foundIntro = res.intro;
+                    if (!foundCredits && res.credits) foundCredits = res.credits;
+                } catch (e) { /* Игнорируем ошибку */ }
+            }
+
+            // Step 4: theintrodb
+            if (!foundIntro || !foundCredits) {
+                try {
+                    const res = await fetchFromTheIntroDb(imdbId, seInfo, durationMs);
+                    if (!foundIntro && res.intro) foundIntro = res.intro;
+                    if (!foundCredits && res.credits) foundCredits = res.credits;
+                } catch (e) { /* Игнорируем ошибку */ }
+            }
+        }
+
+        currentIntro = foundIntro;
+        currentOutro = foundCredits;
+
+        // Кнопку отправки заставки/титров показываем ТОЛЬКО если собственный API доступен И сегмент НЕ найден
+        if (!isKwAvailable || currentIntro !== null) {
+            canSubmitIntro = false;
+        }
+        if (!isKwAvailable || currentOutro !== null) {
+            canSubmitOutro = false;
+        }
+
         updateMarkBtnsVisibility(playerElement);
     }
+
     function updateMarkBtnsVisibility(playerElement) {
         if (!playerElement) return;
         const markIntroBtn = playerElement.querySelector('.kino-mark-intro-btn');
@@ -412,6 +712,7 @@
         const stepBackBtn = playerElement.querySelector('.kino-step-btn-back');
         const stepForwardBtn = playerElement.querySelector('.kino-step-btn-forward');
         if (!markIntroBtn || !markOutroBtn) return;
+
         if (activeMarkingType !== null) {
             if (activeMarkingType === 'outro') {
                 if (stepBackBtn) stepBackBtn.style.display = 'none';
@@ -422,11 +723,14 @@
             }
             return;
         }
+
         const nativeVideo = playerElement.querySelector('video');
         const duration = (nativeVideo && !isNaN(nativeVideo.duration)) ? nativeVideo.duration : (playerElement.duration || 0);
         const currentTime = getCurrentVideoTime(playerElement);
+
         let isIntroBtnVisible = false;
         let isOutroBtnVisible = false;
+
         if (canSubmitIntro) {
             if (duration === 0) {
                 isIntroBtnVisible = true;
@@ -437,14 +741,17 @@
                 }
             }
         }
+
         if (canSubmitOutro && duration > 0) {
             const currentPercent = (currentTime / duration) * 100;
             if (currentPercent >= (100 - SETTINGS.outroShowPercent)) {
                 isOutroBtnVisible = true;
             }
         }
+
         markIntroBtn.style.display = isIntroBtnVisible ? 'inline-flex' : 'none';
         markOutroBtn.style.display = isOutroBtnVisible ? 'inline-flex' : 'none';
+
         if (isOutroBtnVisible) {
             if (stepBackBtn) stepBackBtn.style.display = 'inline-flex';
             if (stepForwardBtn) stepForwardBtn.style.display = 'inline-flex';
@@ -453,12 +760,14 @@
             if (stepForwardBtn) stepForwardBtn.style.display = 'none';
         }
     }
+
     function seekTo(playerElement, seconds) {
         const targetTime = Math.max(0, seconds);
         const nativeVideo = playerElement.querySelector('video');
         if (nativeVideo) nativeVideo.currentTime = targetTime;
         else playerElement.currentTime = targetTime;
     }
+
     function showConfirmationModal(playerElement, startTime, endTime, isOutro, onConfirm) {
         if (document.querySelector('.kino-skip-modal-overlay')) return;
         const overlay = document.createElement('div');
@@ -491,8 +800,9 @@
             e.preventDefault();
             overlay.remove();
         });
-        document.body.appendChild(overlay);
+        playerElement.appendChild(overlay);
     }
+
     function showSettingsModal(playerElement) {
         if (document.querySelector('.kino-skip-modal-overlay')) return;
         const overlay = document.createElement('div');
@@ -501,32 +811,36 @@
             <div class="kino-skip-modal">
                 <h3>Настройки Kino.watch Skipper</h3>
                 
-                <div class="kino-settings-section-title">Заставка (Intro)</div>
-                <div class="kino-settings-group">
-                    <label for="kino-auto-skip-intro-toggle">Автопропуск заставки:</label>
-                    <input type="checkbox" id="kino-auto-skip-intro-toggle" ${SETTINGS.autoSkipIntro ? 'checked' : ''}>
+                <div class="kino-skip-modal-body">
+                    <div class="kino-settings-section-title">Заставка (Intro)</div>
+                    <div class="kino-settings-group">
+                        <label for="kino-auto-skip-intro-toggle">Автопропуск заставки:</label>
+                        <input type="checkbox" id="kino-auto-skip-intro-toggle" ${SETTINGS.autoSkipIntro ? 'checked' : ''}>
+                    </div>
+                    <div class="kino-settings-group">
+                        <label for="kino-timer-intro-input">Таймер автопропуска (сек):</label>
+                        <input type="number" id="kino-timer-intro-input" min="1" max="30" value="${SETTINGS.autoSkipTimerIntro}">
+                    </div>
+                    <div class="kino-settings-group">
+                        <label for="kino-intro-percent-input">Показывать кнопку обрезки первые (%):</label>
+                        <input type="number" id="kino-intro-percent-input" min="1" max="100" value="${SETTINGS.introHidePercent}">
+                    </div>
+
+                    <div class="kino-settings-section-title">Титры (Outro)</div>
+                    <div class="kino-settings-group">
+                        <label for="kino-auto-skip-outro-toggle">Автопропуск титров:</label>
+                        <input type="checkbox" id="kino-auto-skip-outro-toggle" ${SETTINGS.autoSkipOutro ? 'checked' : ''}>
+                    </div>
+                    <div class="kino-settings-group">
+                        <label for="kino-timer-outro-input">Таймер автопропуска (сек):</label>
+                        <input type="number" id="kino-timer-outro-input" min="1" max="30" value="${SETTINGS.autoSkipTimerOutro}">
+                    </div>
+                    <div class="kino-settings-group">
+                        <label for="kino-outro-percent-input">Показывать кнопку обрезки последние (%):</label>
+                        <input type="number" id="kino-outro-percent-input" min="1" max="100" value="${SETTINGS.outroShowPercent}">
+                    </div>
                 </div>
-                <div class="kino-settings-group">
-                    <label for="kino-timer-intro-input">Таймер автопропуска (сек):</label>
-                    <input type="number" id="kino-timer-intro-input" min="1" max="30" value="${SETTINGS.autoSkipTimerIntro}">
-                </div>
-                <div class="kino-settings-group">
-                    <label for="kino-intro-percent-input">Показывать кнопку «Обрезать заставку» первые (%):</label>
-                    <input type="number" id="kino-intro-percent-input" min="1" max="100" value="${SETTINGS.introHidePercent}">
-                </div>
-                <div class="kino-settings-section-title">Титры (Outro)</div>
-                <div class="kino-settings-group">
-                    <label for="kino-auto-skip-outro-toggle">Автопропуск титров:</label>
-                    <input type="checkbox" id="kino-auto-skip-outro-toggle" ${SETTINGS.autoSkipOutro ? 'checked' : ''}>
-                </div>
-                <div class="kino-settings-group">
-                    <label for="kino-timer-outro-input">Таймер автопропуска (сек):</label>
-                    <input type="number" id="kino-timer-outro-input" min="1" max="30" value="${SETTINGS.autoSkipTimerOutro}">
-                </div>
-                <div class="kino-settings-group">
-                    <label for="kino-outro-percent-input">Показывать кнопку «Обрезать титры» последние (%):</label>
-                    <input type="number" id="kino-outro-percent-input" min="1" max="100" value="${SETTINGS.outroShowPercent}">
-                </div>
+
                 <div class="kino-skip-modal-actions">
                     <button class="kino-modal-btn kino-modal-confirm">Сохранить</button>
                     <button class="kino-modal-btn kino-modal-cancel">Отмена</button>
@@ -561,35 +875,43 @@
             e.preventDefault();
             overlay.remove();
         });
-        document.body.appendChild(overlay);
+        playerElement.appendChild(overlay);
     }
+
     function createUI(playerElement) {
         const playerBottom = playerElement.querySelector('.player-bottom');
         if (!playerBottom) return;
         if (playerBottom.querySelector('.kino-skip-controls')) return;
+
         const controlsContainer = document.createElement('div');
         controlsContainer.className = 'kino-skip-controls';
+
         const settingsBtn = document.createElement('button');
         settingsBtn.className = 'kino-btn-expandable kino-settings-btn';
         settingsBtn.innerHTML = `<span class="btn-icon">⚙</span><span class="btn-text">Настройки</span>`;
+
         const stepBackBtn = document.createElement('button');
         stepBackBtn.className = 'kino-btn-expandable kino-step-btn kino-step-btn-back';
         stepBackBtn.style.display = 'none';
         stepBackBtn.title = 'Назад на 1 сек';
         stepBackBtn.innerHTML = `<span class="btn-icon">-1s</span>`;
+
         const markIntroBtn = document.createElement('button');
         markIntroBtn.className = 'kino-btn-expandable kino-mark-intro-btn';
         markIntroBtn.style.display = 'none';
         markIntroBtn.innerHTML = `<span class="btn-icon">✂</span><span class="btn-text">Обрезать заставку</span>`;
+
         const markOutroBtn = document.createElement('button');
         markOutroBtn.className = 'kino-btn-expandable kino-mark-outro-btn';
         markOutroBtn.style.display = 'none';
         markOutroBtn.innerHTML = `<span class="btn-icon">✂</span><span class="btn-text">Обрезать титры</span>`;
+
         const stepForwardBtn = document.createElement('button');
         stepForwardBtn.className = 'kino-btn-expandable kino-step-btn kino-step-btn-forward';
         stepForwardBtn.style.display = 'none';
         stepForwardBtn.title = 'Вперед на 1 сек';
         stepForwardBtn.innerHTML = `<span class="btn-icon">+1s</span>`;
+
         const skipBtn = document.createElement('button');
         skipBtn.className = 'kino-btn-expandable kino-skip-btn';
         skipBtn.style.display = 'none';
@@ -598,10 +920,12 @@
             <span class="btn-icon">⏭</span>
             <span class="btn-text" id="kino-skip-btn-label">Пропустить заставку</span>
         `;
+
         const cancelAutoSkipBtn = document.createElement('button');
         cancelAutoSkipBtn.className = 'kino-btn-expandable kino-cancel-autoskip-btn';
         cancelAutoSkipBtn.style.display = 'none';
         cancelAutoSkipBtn.innerHTML = `<span class="btn-icon">✘</span><span class="btn-text">Отменить пропуск</span>`;
+
         controlsContainer.appendChild(settingsBtn);
         controlsContainer.appendChild(stepBackBtn);
         controlsContainer.appendChild(markIntroBtn);
@@ -610,8 +934,10 @@
         controlsContainer.appendChild(cancelAutoSkipBtn);
         controlsContainer.appendChild(skipBtn);
         playerBottom.prepend(controlsContainer);
+
         const progressFill = skipBtn.querySelector('.kino-skip-progress-fill');
-        let currentActiveSkipSegment = null; // 'intro' или 'outro'
+        let currentActiveSkipSegment = null;
+
         const executeSkip = () => {
             if (currentActiveSkipSegment === 'intro' && currentIntro) {
                 seekTo(playerElement, currentIntro.end_time);
@@ -621,6 +947,7 @@
             skipBtn.style.display = 'none';
             cancelAutoSkipBtn.style.display = 'none';
         };
+
         const resetMarkingState = () => {
             markStartTime = null;
             activeMarkingType = null;
@@ -631,11 +958,13 @@
             settingsBtn.style.display = 'inline-flex';
             updateMarkBtnsVisibility(playerElement);
         };
+
         const handleMarkClick = (type) => {
             const currentTime = getCurrentVideoTime(playerElement);
             const targetBtn = type === 'intro' ? markIntroBtn : markOutroBtn;
             const otherBtn = type === 'intro' ? markOutroBtn : markIntroBtn;
             const btnTextSpan = targetBtn.querySelector('.btn-text');
+
             if (activeMarkingType === null) {
                 activeMarkingType = type;
                 markStartTime = currentTime;
@@ -643,7 +972,6 @@
                 targetBtn.classList.add('marking', 'force-expanded');
                 otherBtn.style.display = 'none';
                 settingsBtn.style.display = 'none';
-                
                 updateMarkBtnsVisibility(playerElement);
             } else {
                 const markEndTime = currentTime;
@@ -652,12 +980,14 @@
                 const labelText = isOutro ? 'Титры' : 'Заставка';
                 const maxDuration = isOutro ? 900 : 300;
                 const maxMinsText = isOutro ? '15 минут' : '5 минут';
+
                 if (markEndTime > markStartTime && duration >= 10 && duration <= maxDuration) {
                     if (!currentMediaId) currentMediaId = getActiveMediaId();
                     if (!currentUsername) currentUsername = getWatchlistUsername();
                     const startToSave = markStartTime;
                     const endToSave = markEndTime;
                     const currentPageUrl = window.location.href;
+
                     showConfirmationModal(playerElement, startToSave, endToSave, isOutro, async () => {
                         try {
                             const payload = {
@@ -696,30 +1026,36 @@
                 resetMarkingState();
             }
         };
+
         const stepTime = (delta) => {
             const currentTime = getCurrentVideoTime(playerElement);
             seekTo(playerElement, currentTime + delta);
         };
+
         settingsBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
             showSettingsModal(playerElement);
         });
+
         stepBackBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
             stepTime(-1);
         });
+
         stepForwardBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
             stepTime(1);
         });
+
         skipBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
             executeSkip();
         });
+
         cancelAutoSkipBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -727,21 +1063,25 @@
             cancelAutoSkipBtn.style.display = 'none';
             if (progressFill) progressFill.style.width = '0%';
         });
+
         markIntroBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
             handleMarkClick('intro');
         });
+
         markOutroBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
             handleMarkClick('outro');
         });
+
         const timeHandler = () => {
             updateMarkBtnsVisibility(playerElement);
             const currentTime = getCurrentVideoTime(playerElement);
             const isInIntro = currentIntro && currentTime >= currentIntro.start_time && currentTime < currentIntro.end_time;
             const isInOutro = currentOutro && currentTime >= currentOutro.start_time && currentTime < currentOutro.end_time;
+
             if (isInIntro || isInOutro) {
                 currentActiveSkipSegment = isInIntro ? 'intro' : 'outro';
                 const skipLabel = playerElement.querySelector('#kino-skip-btn-label');
@@ -753,9 +1093,10 @@
                 }
                 const activeSegment = isInIntro ? currentIntro : currentOutro;
                 const elapsedSegmentTime = currentTime - activeSegment.start_time;
-                
+
                 const isAutoSkipEnabled = isInIntro ? SETTINGS.autoSkipIntro : SETTINGS.autoSkipOutro;
                 const timerLimit = isInIntro ? SETTINGS.autoSkipTimerIntro : SETTINGS.autoSkipTimerOutro;
+
                 if (isAutoSkipEnabled && !isAutoSkipCancelled) {
                     const percentage = Math.min(Math.max((elapsedSegmentTime / timerLimit) * 100, 0), 100);
                     if (progressFill) progressFill.style.width = `${percentage}%`;
@@ -779,10 +1120,12 @@
                 isAutoSkipCancelled = false;
             }
         };
+
         playerElement.addEventListener('time-update', timeHandler);
         const nativeVideo = playerElement.querySelector('video');
         if (nativeVideo) nativeVideo.addEventListener('timeupdate', timeHandler);
     }
+
     function init() {
         const player = document.querySelector('media-player');
         if (!player) return;
@@ -795,6 +1138,7 @@
         }
         createUI(player);
     }
+
     const observer = new MutationObserver(() => init());
     observer.observe(document.body, { childList: true, subtree: true });
     init();
