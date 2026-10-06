@@ -8,7 +8,7 @@
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-Supported-052e40?style=for-the-badge&logo=tampermonkey)](https://www.tampermonkey.net/)
 [![Violentmonkey](https://img.shields.io/badge/Violentmonkey-Supported-3273dc?style=for-the-badge)](https://violentmonkey.github.io/)
-[![Version](https://img.shields.io/badge/version-1.20.1-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
+[![Version](https://img.shields.io/badge/version-1.21.0-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
 
 <br />
 
@@ -52,9 +52,13 @@
 | :---: | :---: |
 | ![Демонстрация кнопки пропустить титры](https://github.com/user-attachments/assets/a4ad65a9-6cbc-4520-bfec-26d1e096bbff) | ![Демонстрация кнопки отмена пропуска титров](https://github.com/user-attachments/assets/990aa239-f77f-4085-9701-40fc599989e6) |
 
+| Кнопка «Жалоба» | Меню жалобы |
+| :---: | :---: |
+| ![Демонстрация кнопки жалобы](https://github.com/user-attachments/assets/1eea92ad-c09e-4f25-bdf2-038c67556d8d) | ![Меню жалобы](https://github.com/user-attachments/assets/e64895ab-f151-4dd8-bfe8-e63f60a4b116) |
+
 | Кнопка «Настройки» | Меню настроек |
 | :---: | :---: |
-| ![Демонстрация кнопки настройки](https://github.com/user-attachments/assets/0b605cec-16f8-4a48-aa38-eca8f6d1b1f4) | ![Меню настроек](https://github.com/user-attachments/assets/61953e4a-b8ae-49bf-8d45-28b3368dad5d) |
+| ![Демонстрация кнопки настройки](https://github.com/user-attachments/assets/6bcac8f5-501b-4eee-b40b-c7339b6bcf6d) | ![Меню настроек](https://github.com/user-attachments/assets/61953e4a-b8ae-49bf-8d45-28b3368dad5d) |
 
 ### Процесс обрезки заставки
 
