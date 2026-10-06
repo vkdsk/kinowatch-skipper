@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kino.watch Skipper
 // @namespace    https://github.com/vkdsk/kinowatch-skipper
-// @version      1.20.1
+// @version      1.21.0
 // @description  Пропуск заставок и титров в плеере kino.watch (с поддержкой fallback API)
 // @author       etodsk
 // @match        https://*.kino.watch/*
@@ -69,7 +69,7 @@
             flex-direction: row !important;
             align-items: center !important;
             gap: 6px !important;
-            margin-left: auto !important;
+            /* margin-left: auto !important; */
             height: 100% !important;
             box-sizing: border-box;
             flex-shrink: 0;
@@ -175,9 +175,17 @@
         }
         .kino-settings-btn {
             background: #4a4d52;
+            margin-right: auto !important;
         }
         .kino-settings-btn:hover {
             background: #343a40;
+            transform: scale(1.03);
+        }
+        .kino-report-btn {
+            background: #360000;
+        }
+        .kino-report-btn:hover {
+            background: #230000;
             transform: scale(1.03);
         }
         @keyframes pulse {
@@ -488,6 +496,10 @@
         }
         const data = await sendApiRequest(requestUrl, { timeout: 15000 });
         
+        // Привязываем метку источника 'kw.xlnt.ovh' к объектам сегментов
+        if (data.intro) data.intro.api_source = 'kw.xlnt.ovh';
+        if (data.outro) data.outro.api_source = 'kw.xlnt.ovh';
+
         return {
             available: true,
             can_submit_intro: Boolean(data.can_submit_intro),
@@ -518,10 +530,13 @@
         const postCreditsObj = isValidSeg(data.post_credits) ? data.post_credits : null;
         const creditsSeg = combineSegments(outroObj, postCreditsObj);
 
-        return {
-            intro: toSecondsSegment(introSeg, durationMs),
-            credits: toSecondsSegment(creditsSeg, durationMs)
-        };
+        const intro = toSecondsSegment(introSeg, durationMs);
+        const credits = toSecondsSegment(creditsSeg, durationMs);
+
+        if (intro) intro.api_source = 'introdb';
+        if (credits) credits.api_source = 'introdb';
+
+        return { intro, credits };
     }
 
     // 3. Запрос к "skipdb"
@@ -547,10 +562,13 @@
         const previewObj = isValidSeg(segs.preview) ? segs.preview : null;
         const creditsSeg = combineSegments(outroObj, previewObj);
 
-        return {
-            intro: toSecondsSegment(introSeg, durationMs),
-            credits: toSecondsSegment(creditsSeg, durationMs)
-        };
+        const intro = toSecondsSegment(introSeg, durationMs);
+        const credits = toSecondsSegment(creditsSeg, durationMs);
+
+        if (intro) intro.api_source = 'skipdb';
+        if (credits) credits.api_source = 'skipdb';
+
+        return { intro, credits };
     }
 
     // 4. Запрос к "theintrodb"
@@ -586,7 +604,6 @@
                         maxEnd = Math.max(maxEnd, item.end_ms);
                         hasEnd = true;
                     } else if (item.end_ms === null) {
-                        // Если null — ставим длительность или спец-маркер Infinity
                         maxEnd = durationMs > 0 ? durationMs : Infinity;
                         hasEnd = true;
                     }
@@ -602,10 +619,13 @@
         const introSeg = processArray(data.intro, data.recap);
         const creditsSeg = processArray(data.credits, data.preview);
 
-        return {
-            intro: toSecondsSegment(introSeg, durationMs),
-            credits: toSecondsSegment(creditsSeg, durationMs)
-        };
+        const intro = toSecondsSegment(introSeg, durationMs);
+        const credits = toSecondsSegment(creditsSeg, durationMs);
+
+        if (intro) intro.api_source = 'theintrodb';
+        if (credits) credits.api_source = 'theintrodb';
+
+        return { intro, credits };
     }
 
     function showToast(playerElement, message, type = 'success') {
@@ -815,6 +835,47 @@
         else playerElement.currentTime = targetTime;
     }
 
+    function showReportModal(playerElement, startTime, endTime, isOutro, onSubmit) {
+        if (document.querySelector('.kino-skip-modal-overlay')) return;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'kino-skip-modal-overlay';
+
+        const formattedStart = formatTime(startTime);
+        const formattedEnd = formatTime(endTime);
+        const labelText = isOutro ? 'титры' : 'заставку';
+
+        overlay.innerHTML = `
+            <div class="kino-skip-modal">
+                <h3>Отправить жалобу</h3>
+                <p>Жалоба на ${labelText}: <span class="time-range">${formattedStart} — ${formattedEnd}</span></p>
+                <div class="kino-skip-modal-actions">
+                    <button class="kino-modal-btn kino-modal-confirm">Отправить жалобу</button>
+                    <button class="kino-modal-btn kino-modal-cancel">Отмена</button>
+                </div>
+            </div>
+        `;
+
+        ['click', 'pointerdown', 'mousedown', 'mouseup', 'keydown'].forEach((evt) => {
+            overlay.addEventListener(evt, (e) => e.stopPropagation());
+        });
+
+        overlay.querySelector('.kino-modal-confirm').addEventListener('click', async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            overlay.remove();
+            await onSubmit();
+        });
+
+        overlay.querySelector('.kino-modal-cancel').addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            overlay.remove();
+        });
+
+        playerElement.appendChild(overlay);
+    }
+
     function showConfirmationModal(playerElement, startTime, endTime, isOutro, onConfirm) {
         if (document.querySelector('.kino-skip-modal-overlay')) return;
         const overlay = document.createElement('div');
@@ -954,6 +1015,12 @@
         settingsBtn.className = 'kino-btn-expandable kino-settings-btn';
         settingsBtn.innerHTML = `<span class="btn-icon">⚙</span><span class="btn-text">Настройки</span>`;
 
+        // 1. Создаем кнопку "Жалоба"
+        const reportBtn = document.createElement('button');
+        reportBtn.className = 'kino-btn-expandable kino-report-btn';
+        reportBtn.style.display = 'none'; // Показывается только когда активен сегмент
+        reportBtn.innerHTML = `<span class="btn-icon">⚠</span><span class="btn-text">Жалоба</span>`;
+
         const stepBackBtn = document.createElement('button');
         stepBackBtn.className = 'kino-btn-expandable kino-step-btn kino-step-btn-back';
         stepBackBtn.style.display = 'none';
@@ -990,7 +1057,9 @@
         cancelAutoSkipBtn.style.display = 'none';
         cancelAutoSkipBtn.innerHTML = `<span class="btn-icon">✘</span><span class="btn-text">Отменить пропуск</span>`;
 
+        // 2. Вставляем reportBtn сразу после settingsBtn
         controlsContainer.appendChild(settingsBtn);
+        controlsContainer.appendChild(reportBtn);
         controlsContainer.appendChild(stepBackBtn);
         controlsContainer.appendChild(markIntroBtn);
         controlsContainer.appendChild(markOutroBtn);
@@ -1010,6 +1079,7 @@
             }
             skipBtn.style.display = 'none';
             cancelAutoSkipBtn.style.display = 'none';
+            reportBtn.style.display = 'none';
         };
 
         const resetMarkingState = () => {
@@ -1036,6 +1106,7 @@
                 targetBtn.classList.add('marking', 'force-expanded');
                 otherBtn.style.display = 'none';
                 settingsBtn.style.display = 'none';
+                reportBtn.style.display = 'none';
                 updateMarkBtnsVisibility(playerElement);
             } else {
                 const markEndTime = currentTime;
@@ -1102,6 +1173,45 @@
             showSettingsModal(playerElement);
         });
 
+        // 3. Обработчик клика на кнопку «Жалоба»
+        reportBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (!currentActiveSkipSegment) return;
+
+            const isOutro = currentActiveSkipSegment === 'outro';
+            const activeSegment = isOutro ? currentOutro : currentIntro;
+            if (!activeSegment) return;
+
+            showReportModal(
+                playerElement,
+                activeSegment.start_time,
+                activeSegment.end_time,
+                isOutro,
+                async () => {
+                    try {
+                        if (!currentMediaId) currentMediaId = getActiveMediaId();
+                        const res = await sendApiRequest(API_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                action: 'report',
+                                media_id: String(currentMediaId),
+                                page_url: window.location.href,
+                                type: isOutro ? 'outro' : 'intro',
+                                start_time: Number(activeSegment.start_time),
+                                end_time: Number(activeSegment.end_time),
+                                api_source: activeSegment.api_source || 'kw.xlnt.ovh'
+                            })
+                        });
+                        showToast(playerElement, res.message || 'Жалоба успешно отправлена!', 'success');
+                    } catch (err) {
+                        showToast(playerElement, err.message || 'Ошибка при отправке жалобы', 'error');
+                    }
+                }
+            );
+        });
+
         stepBackBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -1148,6 +1258,12 @@
 
             if (isInIntro || isInOutro) {
                 currentActiveSkipSegment = isInIntro ? 'intro' : 'outro';
+                
+                // Показываем кнопку "Жалоба" при нахождении в сегменте
+                if (reportBtn.style.display !== 'inline-flex') {
+                    reportBtn.style.display = 'inline-flex';
+                }
+
                 const skipLabel = playerElement.querySelector('#kino-skip-btn-label');
                 if (skipLabel) {
                     skipLabel.innerText = isInIntro ? 'Пропустить заставку' : 'Пропустить титры';
@@ -1178,6 +1294,8 @@
                 }
             } else {
                 currentActiveSkipSegment = null;
+                // Скрываем кнопку "Жалоба" за пределами сегментов
+                if (reportBtn.style.display !== 'none') reportBtn.style.display = 'none';
                 if (skipBtn.style.display !== 'none') skipBtn.style.display = 'none';
                 if (cancelAutoSkipBtn.style.display !== 'none') cancelAutoSkipBtn.style.display = 'none';
                 if (progressFill) progressFill.style.width = '0%';
