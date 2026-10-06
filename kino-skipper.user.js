@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kino.watch Skipper
 // @namespace    https://github.com/vkdsk/kinowatch-skipper
-// @version      1.21.0
+// @version      1.22
 // @description  Пропуск заставок и титров в плеере kino.watch (с поддержкой fallback API)
 // @author       etodsk
 // @match        https://*.kino.watch/*
@@ -25,6 +25,31 @@
     'use strict';
 
     const SETTINGS = {
+        get enableIntro() {
+            return GM_getValue('enableIntro', true);
+        },
+        set enableIntro(val) {
+            GM_setValue('enableIntro', Boolean(val));
+        },
+        get enableRecap() {
+            return GM_getValue('enableRecap', false);
+        },
+        set enableRecap(val) {
+            GM_setValue('enableRecap', Boolean(val));
+        },
+        get enableOutro() {
+            return GM_getValue('enableOutro', true);
+        },
+        set enableOutro(val) {
+            GM_setValue('enableOutro', Boolean(val));
+        },
+
+        get enableCredits() {
+            return GM_getValue('enableCredits', true);
+        },
+        set enableCredits(val) {
+            GM_setValue('enableCredits', Boolean(val));
+        },
         get autoSkipIntro() {
             return GM_getValue('autoSkipIntro', true);
         },
@@ -32,10 +57,10 @@
             GM_setValue('autoSkipIntro', Boolean(val));
         },
         get autoSkipTimerIntro() {
-            return GM_getValue('autoSkipTimerIntro', 7);
+            return GM_getValue('autoSkipTimerIntro', 5);
         },
         set autoSkipTimerIntro(val) {
-            GM_setValue('autoSkipTimerIntro', Math.max(1, parseInt(val, 10) || 7));
+            GM_setValue('autoSkipTimerIntro', Math.max(1, parseInt(val, 10) || 5));
         },
         get introHidePercent() {
             return GM_getValue('introHidePercent', 15);
@@ -50,10 +75,10 @@
             GM_setValue('autoSkipOutro', Boolean(val));
         },
         get autoSkipTimerOutro() {
-            return GM_getValue('autoSkipTimerOutro', 7);
+            return GM_getValue('autoSkipTimerOutro', 5);
         },
         set autoSkipTimerOutro(val) {
-            GM_setValue('autoSkipTimerOutro', Math.max(1, parseInt(val, 10) || 7));
+            GM_setValue('autoSkipTimerOutro', Math.max(1, parseInt(val, 10) || 5));
         },
         get outroShowPercent() {
             return GM_getValue('outroShowPercent', 15);
@@ -488,6 +513,31 @@
         };
     }
 
+    function resolveSegmentsFromData(rawIntro, rawRecap, rawOutro, rawCredits, rawPostCredits, rawPreview, durationMs, apiSource) {
+        const isValidSeg = (s) => s && (typeof s.start_ms === 'number' || s.start_ms === null) && (typeof s.end_ms === 'number' || s.end_ms === null);
+
+        const useIntro = SETTINGS.enableIntro && isValidSeg(rawIntro) ? rawIntro : null;
+        const useRecap = SETTINGS.enableRecap && isValidSeg(rawRecap) ? rawRecap : null;
+        const introSeg = combineSegments(useIntro, useRecap);
+
+        const useOutro = SETTINGS.enableOutro && isValidSeg(rawOutro) ? rawOutro : null;
+        const useCredits = SETTINGS.enableCredits && isValidSeg(rawCredits) ? rawCredits : null;
+        const usePostCredits = SETTINGS.enableCredits && isValidSeg(rawPostCredits) ? rawPostCredits : null;
+        const usePreview = SETTINGS.enableOutro && isValidSeg(rawPreview) ? rawPreview : null;
+
+        const creditsCombined = combineSegments(useCredits, usePostCredits);
+        const outroCombined = combineSegments(useOutro, usePreview);
+        const outroSeg = combineSegments(outroCombined, creditsCombined);
+
+        const intro = toSecondsSegment(introSeg, durationMs);
+        const credits = toSecondsSegment(outroSeg, durationMs);
+
+        if (intro) intro.api_source = apiSource;
+        if (credits) credits.api_source = apiSource;
+
+        return { intro, credits };
+    }
+    
     // 1. Запрос к "kw.xlnt.ovh"
     async function fetchFromKwApi(mediaId) {
         let requestUrl = `${API_URL}?media_id=${encodeURIComponent(mediaId)}`;
@@ -495,17 +545,19 @@
             requestUrl += `&username=${encodeURIComponent(currentUsername)}`;
         }
         const data = await sendApiRequest(requestUrl, { timeout: 15000 });
-        
-        // Привязываем метку источника 'kw.xlnt.ovh' к объектам сегментов
-        if (data.intro) data.intro.api_source = 'kw.xlnt.ovh';
-        if (data.outro) data.outro.api_source = 'kw.xlnt.ovh';
+
+        let intro = SETTINGS.enableIntro && data.intro ? data.intro : null;
+        let outro = SETTINGS.enableCredits && data.outro ? data.outro : null;
+
+        if (intro) intro.api_source = 'kw.xlnt.ovh';
+        if (outro) outro.api_source = 'kw.xlnt.ovh';
 
         return {
             available: true,
             can_submit_intro: Boolean(data.can_submit_intro),
             can_submit_outro: Boolean(data.can_submit_outro),
-            intro: data.intro || null,
-            credits: data.outro || null
+            intro: intro,
+            credits: outro
         };
     }
 
@@ -520,23 +572,16 @@
 
         const data = await sendApiRequest(url, { timeout: 15000 });
 
-        const isValidSeg = (s) => s && (typeof s.start_ms === 'number' || s.start_ms === null) && (typeof s.end_ms === 'number' || s.end_ms === null);
-
-        const introObj = isValidSeg(data.intro) ? data.intro : null;
-        const recapObj = isValidSeg(data.recap) ? data.recap : null;
-        const introSeg = combineSegments(introObj, recapObj);
-
-        const outroObj = isValidSeg(data.outro) ? data.outro : null;
-        const postCreditsObj = isValidSeg(data.post_credits) ? data.post_credits : null;
-        const creditsSeg = combineSegments(outroObj, postCreditsObj);
-
-        const intro = toSecondsSegment(introSeg, durationMs);
-        const credits = toSecondsSegment(creditsSeg, durationMs);
-
-        if (intro) intro.api_source = 'introdb';
-        if (credits) credits.api_source = 'introdb';
-
-        return { intro, credits };
+        return resolveSegmentsFromData(
+            data.intro,
+            data.recap,
+            data.outro,
+            null,
+            data.post_credits,
+            null,
+            durationMs,
+            'introdb'
+        );
     }
 
     // 3. Запрос к "skipdb"
@@ -552,23 +597,16 @@
         const data = await sendApiRequest(url, { timeout: 15000 });
         const segs = data.segments || {};
 
-        const isValidSeg = (s) => s && (typeof s.start_ms === 'number' || s.start_ms === null) && (typeof s.end_ms === 'number' || s.end_ms === null);
-
-        const introObj = isValidSeg(segs.intro) ? segs.intro : null;
-        const recapObj = isValidSeg(segs.recap) ? segs.recap : null;
-        const introSeg = combineSegments(introObj, recapObj);
-
-        const outroObj = isValidSeg(segs.outro) ? segs.outro : null;
-        const previewObj = isValidSeg(segs.preview) ? segs.preview : null;
-        const creditsSeg = combineSegments(outroObj, previewObj);
-
-        const intro = toSecondsSegment(introSeg, durationMs);
-        const credits = toSecondsSegment(creditsSeg, durationMs);
-
-        if (intro) intro.api_source = 'skipdb';
-        if (credits) credits.api_source = 'skipdb';
-
-        return { intro, credits };
+        return resolveSegmentsFromData(
+            segs.intro,
+            segs.recap,
+            segs.outro,
+            null,
+            null,
+            segs.preview,
+            durationMs,
+            'skipdb'
+        );
     }
 
     // 4. Запрос к "theintrodb"
@@ -583,49 +621,18 @@
 
         const data = await sendApiRequest(url, { timeout: 15000 });
 
-        const processArray = (arr1, arr2) => {
-            const list = [...(Array.isArray(arr1) ? arr1 : []), ...(Array.isArray(arr2) ? arr2 : [])];
-            let minStart = Infinity;
-            let hasStart = false;
-            let maxEnd = -Infinity;
-            let hasEnd = false;
+        const getFirstValid = (arr) => (Array.isArray(arr) && arr.length > 0 ? arr[0] : null);
 
-            for (const item of list) {
-                if (item) {
-                    if (typeof item.start_ms === 'number') {
-                        minStart = Math.min(minStart, item.start_ms);
-                        hasStart = true;
-                    } else if (item.start_ms === null) {
-                        minStart = 0;
-                        hasStart = true;
-                    }
-
-                    if (typeof item.end_ms === 'number') {
-                        maxEnd = Math.max(maxEnd, item.end_ms);
-                        hasEnd = true;
-                    } else if (item.end_ms === null) {
-                        maxEnd = durationMs > 0 ? durationMs : Infinity;
-                        hasEnd = true;
-                    }
-                }
-            }
-
-            if (hasStart && hasEnd) {
-                return { start_ms: minStart, end_ms: maxEnd === Infinity ? null : maxEnd };
-            }
-            return null;
-        };
-
-        const introSeg = processArray(data.intro, data.recap);
-        const creditsSeg = processArray(data.credits, data.preview);
-
-        const intro = toSecondsSegment(introSeg, durationMs);
-        const credits = toSecondsSegment(creditsSeg, durationMs);
-
-        if (intro) intro.api_source = 'theintrodb';
-        if (credits) credits.api_source = 'theintrodb';
-
-        return { intro, credits };
+        return resolveSegmentsFromData(
+            getFirstValid(data.intro),
+            getFirstValid(data.recap),
+            null,
+            getFirstValid(data.credits),
+            null,
+            getFirstValid(data.preview),
+            durationMs,
+            'theintrodb'
+        );
     }
 
     function showToast(playerElement, message, type = 'success') {
@@ -935,7 +942,7 @@
         overlay.innerHTML = `
             <div class="kino-skip-modal">
                 <h3>Настройки Kino.watch Skipper</h3>
-                
+
                 <div class="kino-skip-modal-body">
                     <div class="kino-settings-section-title">Заставка (Intro)</div>
                     <div class="kino-settings-group">
@@ -945,6 +952,14 @@
                     <div class="kino-settings-group">
                         <label for="kino-timer-intro-input">Таймер автопропуска (сек):</label>
                         <input type="number" id="kino-timer-intro-input" min="1" max="30" value="${SETTINGS.autoSkipTimerIntro}">
+                    </div>
+                    <div class="kino-settings-group">
+                        <label for="kino-enable-intro-toggle">Искать Intro (Заставку):</label>
+                        <input type="checkbox" id="kino-enable-intro-toggle" ${SETTINGS.enableIntro ? 'checked' : ''}>
+                    </div>
+                    <div class="kino-settings-group">
+                        <label for="kino-enable-recap-toggle">Искать Recap (Ранее в сериале):</label>
+                        <input type="checkbox" id="kino-enable-recap-toggle" ${SETTINGS.enableRecap ? 'checked' : ''}>
                     </div>
                     <div class="kino-settings-group">
                         <label for="kino-intro-percent-input">Показывать кнопку обрезки первые (%):</label>
@@ -959,6 +974,14 @@
                     <div class="kino-settings-group">
                         <label for="kino-timer-outro-input">Таймер автопропуска (сек):</label>
                         <input type="number" id="kino-timer-outro-input" min="1" max="30" value="${SETTINGS.autoSkipTimerOutro}">
+                    </div>
+                    <div class="kino-settings-group">
+                        <label for="kino-enable-outro-toggle">Искать Outro (Анонс / Нач. титры):</label>
+                        <input type="checkbox" id="kino-enable-outro-toggle" ${SETTINGS.enableOutro ? 'checked' : ''}>
+                    </div>
+                    <div class="kino-settings-group">
+                        <label for="kino-enable-credits-toggle">Искать Credits (Титры):</label>
+                        <input type="checkbox" id="kino-enable-credits-toggle" ${SETTINGS.enableCredits ? 'checked' : ''}>
                     </div>
                     <div class="kino-settings-group">
                         <label for="kino-outro-percent-input">Показывать кнопку обрезки последние (%):</label>
@@ -977,19 +1000,27 @@
         });
         const autoSkipIntroInput = overlay.querySelector('#kino-auto-skip-intro-toggle');
         const timerIntroInput = overlay.querySelector('#kino-timer-intro-input');
+        const enableIntroInput = overlay.querySelector('#kino-enable-intro-toggle');
+        const enableRecapInput = overlay.querySelector('#kino-enable-recap-toggle');
         const introPercentInput = overlay.querySelector('#kino-intro-percent-input');
         const autoSkipOutroInput = overlay.querySelector('#kino-auto-skip-outro-toggle');
         const timerOutroInput = overlay.querySelector('#kino-timer-outro-input');
+        const enableOutroInput = overlay.querySelector('#kino-enable-outro-toggle').checked;
+        const enableCreditsInput = overlay.querySelector('#kino-enable-credits-toggle').checked;
         const outroPercentInput = overlay.querySelector('#kino-outro-percent-input');
         overlay.querySelector('.kino-modal-confirm').addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            
+
             SETTINGS.autoSkipIntro = autoSkipIntroInput.checked;
             SETTINGS.autoSkipTimerIntro = timerIntroInput.value;
+            SETTINGS.enableIntro = enableIntroInput.checked;
+            SETTINGS.enableRecap = enableRecapInput.checked;
             SETTINGS.introHidePercent = introPercentInput.value;
             SETTINGS.autoSkipOutro = autoSkipOutroInput.checked;
             SETTINGS.autoSkipTimerOutro = timerOutroInput.value;
+            SETTINGS.enableOutro = enableOutroInput.checked;
+            SETTINGS.enableCredits = enableCreditsInput.checked;
             SETTINGS.outroShowPercent = outroPercentInput.value;
             updateMarkBtnsVisibility(playerElement);
             showToast(playerElement, 'Настройки сохранены!', 'success');
@@ -1258,7 +1289,7 @@
 
             if (isInIntro || isInOutro) {
                 currentActiveSkipSegment = isInIntro ? 'intro' : 'outro';
-                
+
                 // Показываем кнопку "Жалоба" при нахождении в сегменте
                 if (reportBtn.style.display !== 'inline-flex') {
                     reportBtn.style.display = 'inline-flex';
