@@ -8,7 +8,7 @@
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-Supported-052e40?style=for-the-badge&logo=tampermonkey)](https://www.tampermonkey.net/)
 [![Violentmonkey](https://img.shields.io/badge/Violentmonkey-Supported-3273dc?style=for-the-badge)](https://violentmonkey.github.io/)
-[![Version](https://img.shields.io/badge/version-1.20.0-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
+[![Version](https://img.shields.io/badge/version-1.20.1-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
 
 <br />
 
