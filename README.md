@@ -8,7 +8,7 @@
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-Supported-052e40?style=for-the-badge&logo=tampermonkey)](https://www.tampermonkey.net/)
 [![Violentmonkey](https://img.shields.io/badge/Violentmonkey-Supported-3273dc?style=for-the-badge)](https://violentmonkey.github.io/)
-[![Version](https://img.shields.io/badge/version-1.21.0-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
+[![Version](https://img.shields.io/badge/version-1.22-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
 
 <br />
 
@@ -29,7 +29,7 @@
 
 - ⏭️ **Пропуск заставки/титров:** При начале заставки/титров появляется кнопка с пропуском заставки/титров.
 - ⏲️ **Автопропуск с обратным отчетом:** При начале заставки/титров появляется 7-секундный плавный таймер пропускa.
-- ⚙️ **Настройка автопропуска:** При нажатии на кнопку настройки можно отключить и изменить таймер перемотки.
+- ⚙️ **Настройка автопропуска:** При нажатии на кнопку настройки можно отключить intro, recap, outro, credits, отключить автопропуск и изменить таймер автопропуска.
 - 🛑 **Кнопка отмены:** Если вы не хотите пропускать заставку/титры в конкретной серии — его можно отменить в один клик.
 - ⚠️ **Кнопка жалобы:** Если заставка/титры не соответствуют — можно отправить жалобу и мы починим.
 - 🎯 **Краудсорсинг меток (Opt-In):** Кнопка отправки заставки/титров доступна только для пользователей, которые еще не отправляли сегмент заставки/титров для пропуска.
@@ -59,7 +59,7 @@
 
 | Кнопка «Настройки» | Меню настроек |
 | :---: | :---: |
-| ![Демонстрация кнопки настройки](https://github.com/user-attachments/assets/6bcac8f5-501b-4eee-b40b-c7339b6bcf6d) | ![Меню настроек](https://github.com/user-attachments/assets/61953e4a-b8ae-49bf-8d45-28b3368dad5d) |
+| ![Демонстрация кнопки настройки](https://github.com/user-attachments/assets/6bcac8f5-501b-4eee-b40b-c7339b6bcf6d) | ![Меню настроек](https://github.com/user-attachments/assets/4833a67e-4b61-4ef8-a220-2172bf4eb4fe) |
 
 ### Процесс обрезки заставки
 
