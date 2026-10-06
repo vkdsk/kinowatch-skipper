@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kino.watch Skipper
 // @namespace    https://github.com/vkdsk/kinowatch-skipper
-// @version      1.20.0
+// @version      1.20.1
 // @description  Пропуск заставок и титров в плеере kino.watch (с поддержкой fallback API)
 // @author       etodsk
 // @match        https://*.kino.watch/*
@@ -431,25 +431,52 @@
         });
     }
 
-    // Вспомогательный объединитель диапозонов старта и конца
+    // Вспомогательный объединитель диапазонов старта и конца с учетом null
     function combineSegments(seg1, seg2) {
         if (!seg1 && !seg2) return null;
         if (seg1 && !seg2) return seg1;
         if (!seg1 && seg2) return seg2;
+
+        const resolveMinStart = (s1, s2) => {
+            if (s1 === null || s1 === undefined || s2 === null || s2 === undefined) return null;
+            return Math.min(s1, s2);
+        };
+
+        const resolveMaxEnd = (e1, e2) => {
+            if (e1 === null || e1 === undefined || e2 === null || e2 === undefined) return null;
+            return Math.max(e1, e2);
+        };
+
         return {
-            start_ms: Math.min(seg1.start_ms, seg2.start_ms),
-            end_ms: Math.max(seg1.end_ms, seg2.end_ms)
+            start_ms: resolveMinStart(seg1.start_ms, seg2.start_ms),
+            end_ms: resolveMaxEnd(seg1.end_ms, seg2.end_ms)
         };
     }
 
     // Нормализация временного диапазона в секунды
-    function toSecondsSegment(segMs) {
-        if (!segMs || typeof segMs.start_ms !== 'number' || typeof segMs.end_ms !== 'number') {
+    function toSecondsSegment(segMs, totalDurationMs = 0) {
+        if (!segMs) return null;
+
+        let start = segMs.start_ms;
+        let end = segMs.end_ms;
+
+        // Если начало null -> это начало видео (0)
+        if (start === null || start === undefined) {
+            start = 0;
+        }
+
+        // Если конец null -> подставляем длительность или Infinity
+        if (end === null || end === undefined) {
+            end = totalDurationMs > 0 ? totalDurationMs : Infinity;
+        }
+
+        if (start === null || end === null || start >= end) {
             return null;
         }
+
         return {
-            start_time: segMs.start_ms / 1000,
-            end_time: segMs.end_ms / 1000
+            start_time: start / 1000,
+            end_time: end === Infinity ? Infinity : end / 1000
         };
     }
 
@@ -471,7 +498,7 @@
     }
 
     // 2. Запрос к "introdb"
-    async function fetchFromIntroDb(imdbId, seInfo) {
+    async function fetchFromIntroDb(imdbId, seInfo, durationMs) {
         let url = `https://api.introdb.app/segments?imdb_id=${encodeURIComponent(imdbId)}`;
         if (seInfo.isMovie) {
             url += `&is_movie=true`;
@@ -481,19 +508,19 @@
 
         const data = await sendApiRequest(url, { timeout: 15000 });
 
-        let introSeg = null;
-        const introObj = (data.intro && typeof data.intro.start_ms === 'number' && typeof data.intro.end_ms === 'number') ? data.intro : null;
-        const recapObj = (data.recap && typeof data.recap.start_ms === 'number' && typeof data.recap.end_ms === 'number') ? data.recap : null;
-        introSeg = combineSegments(introObj, recapObj);
+        const isValidSeg = (s) => s && (typeof s.start_ms === 'number' || s.start_ms === null) && (typeof s.end_ms === 'number' || s.end_ms === null);
 
-        let creditsSeg = null;
-        const outroObj = (data.outro && typeof data.outro.start_ms === 'number' && typeof data.outro.end_ms === 'number') ? data.outro : null;
-        const postCreditsObj = (data.post_credits && typeof data.post_credits.start_ms === 'number' && typeof data.post_credits.end_ms === 'number') ? data.post_credits : null;
-        creditsSeg = combineSegments(outroObj, postCreditsObj);
+        const introObj = isValidSeg(data.intro) ? data.intro : null;
+        const recapObj = isValidSeg(data.recap) ? data.recap : null;
+        const introSeg = combineSegments(introObj, recapObj);
+
+        const outroObj = isValidSeg(data.outro) ? data.outro : null;
+        const postCreditsObj = isValidSeg(data.post_credits) ? data.post_credits : null;
+        const creditsSeg = combineSegments(outroObj, postCreditsObj);
 
         return {
-            intro: toSecondsSegment(introSeg),
-            credits: toSecondsSegment(creditsSeg)
+            intro: toSecondsSegment(introSeg, durationMs),
+            credits: toSecondsSegment(creditsSeg, durationMs)
         };
     }
 
@@ -510,19 +537,19 @@
         const data = await sendApiRequest(url, { timeout: 15000 });
         const segs = data.segments || {};
 
-        let introSeg = null;
-        const introObj = (segs.intro && typeof segs.intro.start_ms === 'number' && typeof segs.intro.end_ms === 'number') ? segs.intro : null;
-        const recapObj = (segs.recap && typeof segs.recap.start_ms === 'number' && typeof segs.recap.end_ms === 'number') ? segs.recap : null;
-        introSeg = combineSegments(introObj, recapObj);
+        const isValidSeg = (s) => s && (typeof s.start_ms === 'number' || s.start_ms === null) && (typeof s.end_ms === 'number' || s.end_ms === null);
 
-        let creditsSeg = null;
-        const outroObj = (segs.outro && typeof segs.outro.start_ms === 'number' && typeof segs.outro.end_ms === 'number') ? segs.outro : null;
-        const previewObj = (segs.preview && typeof segs.preview.start_ms === 'number' && typeof segs.preview.end_ms === 'number') ? segs.preview : null;
-        creditsSeg = combineSegments(outroObj, previewObj);
+        const introObj = isValidSeg(segs.intro) ? segs.intro : null;
+        const recapObj = isValidSeg(segs.recap) ? segs.recap : null;
+        const introSeg = combineSegments(introObj, recapObj);
+
+        const outroObj = isValidSeg(segs.outro) ? segs.outro : null;
+        const previewObj = isValidSeg(segs.preview) ? segs.preview : null;
+        const creditsSeg = combineSegments(outroObj, previewObj);
 
         return {
-            intro: toSecondsSegment(introSeg),
-            credits: toSecondsSegment(creditsSeg)
+            intro: toSecondsSegment(introSeg, durationMs),
+            credits: toSecondsSegment(creditsSeg, durationMs)
         };
     }
 
@@ -541,19 +568,33 @@
         const processArray = (arr1, arr2) => {
             const list = [...(Array.isArray(arr1) ? arr1 : []), ...(Array.isArray(arr2) ? arr2 : [])];
             let minStart = Infinity;
+            let hasStart = false;
             let maxEnd = -Infinity;
+            let hasEnd = false;
 
             for (const item of list) {
-                if (item && typeof item.start_ms === 'number') {
-                    if (item.start_ms < minStart) minStart = item.start_ms;
-                }
-                if (item && typeof item.end_ms === 'number') {
-                    if (item.end_ms > maxEnd) maxEnd = item.end_ms;
+                if (item) {
+                    if (typeof item.start_ms === 'number') {
+                        minStart = Math.min(minStart, item.start_ms);
+                        hasStart = true;
+                    } else if (item.start_ms === null) {
+                        minStart = 0;
+                        hasStart = true;
+                    }
+
+                    if (typeof item.end_ms === 'number') {
+                        maxEnd = Math.max(maxEnd, item.end_ms);
+                        hasEnd = true;
+                    } else if (item.end_ms === null) {
+                        // Если null — ставим длительность или спец-маркер Infinity
+                        maxEnd = durationMs > 0 ? durationMs : Infinity;
+                        hasEnd = true;
+                    }
                 }
             }
 
-            if (minStart !== Infinity && maxEnd !== -Infinity && minStart < maxEnd) {
-                return { start_ms: minStart, end_ms: maxEnd };
+            if (hasStart && hasEnd) {
+                return { start_ms: minStart, end_ms: maxEnd === Infinity ? null : maxEnd };
             }
             return null;
         };
@@ -562,8 +603,8 @@
         const creditsSeg = processArray(data.credits, data.preview);
 
         return {
-            intro: toSecondsSegment(introSeg),
-            credits: toSecondsSegment(creditsSeg)
+            intro: toSecondsSegment(introSeg, durationMs),
+            credits: toSecondsSegment(creditsSeg, durationMs)
         };
     }
 
@@ -577,8 +618,14 @@
     }
 
     function formatTime(seconds) {
-        const mins = Math.floor(seconds / 60);
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
         const secs = Math.floor(seconds % 60);
+
+        if (hours > 0) {
+            return `${hours}:${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
+        }
+
         return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
     }
 
@@ -666,7 +713,7 @@
             // Step 2: introdb
             if (!foundIntro || !foundCredits) {
                 try {
-                    const res = await fetchFromIntroDb(imdbId, seInfo);
+                    const res = await fetchFromIntroDb(imdbId, seInfo, durationMs);
                     if (!foundIntro && res.intro) foundIntro = res.intro;
                     if (!foundCredits && res.credits) foundCredits = res.credits;
                 } catch (e) { /* Игнорируем ошибку */ }
@@ -773,13 +820,30 @@
         const overlay = document.createElement('div');
         overlay.className = 'kino-skip-modal-overlay';
         const duration = (endTime - startTime).toFixed(1);
+        const totalSeconds = parseFloat(duration);
+
+        let durationText;
+
+        if (totalSeconds >= 60) {
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = (totalSeconds % 60).toFixed(1);
+
+            if (hours > 0) {
+                durationText = `(${hours} ч ${minutes} мин ${seconds} сек)`;
+            } else {
+                durationText = `(${minutes} мин ${seconds} сек)`;
+            }
+        } else {
+            durationText = `(${duration} сек)`;
+        }
         const formattedStart = formatTime(startTime);
         const formattedEnd = formatTime(endTime);
         const labelText = isOutro ? 'титры' : 'заставку';
         overlay.innerHTML = `
             <div class="kino-skip-modal">
                 <h3>Сохранить ${labelText}?</h3>
-                <p>Интервал: <span class="time-range">${formattedStart} — ${formattedEnd}</span> (${duration} сек)</p>
+                <p>Интервал: <span class="time-range">${formattedStart} — ${formattedEnd}</span> ${durationText}</p>
                 <div class="kino-skip-modal-actions">
                     <button class="kino-modal-btn kino-modal-confirm">Отправить</button>
                     <button class="kino-modal-btn kino-modal-cancel">Отмена</button>
