@@ -950,16 +950,16 @@
                         <input type="checkbox" id="kino-auto-skip-intro-toggle" ${SETTINGS.autoSkipIntro ? 'checked' : ''}>
                     </div>
                     <div class="kino-settings-group">
-                        <label for="kino-timer-intro-input">Таймер автопропуска (сек):</label>
-                        <input type="number" id="kino-timer-intro-input" min="1" max="30" value="${SETTINGS.autoSkipTimerIntro}">
-                    </div>
-                    <div class="kino-settings-group">
-                        <label for="kino-enable-intro-toggle">Искать Intro (Заставку):</label>
+                        <label for="kino-enable-intro-toggle">Пропускать Intro (Заставку):</label>
                         <input type="checkbox" id="kino-enable-intro-toggle" ${SETTINGS.enableIntro ? 'checked' : ''}>
                     </div>
                     <div class="kino-settings-group">
-                        <label for="kino-enable-recap-toggle">Искать Recap (Ранее в сериале):</label>
+                        <label for="kino-enable-recap-toggle">Пропускать Recap (Ранее в сериале):</label>
                         <input type="checkbox" id="kino-enable-recap-toggle" ${SETTINGS.enableRecap ? 'checked' : ''}>
+                    </div>
+                    <div class="kino-settings-group">
+                        <label for="kino-timer-intro-input">Таймер автопропуска (сек):</label>
+                        <input type="number" id="kino-timer-intro-input" min="1" max="30" value="${SETTINGS.autoSkipTimerIntro}">
                     </div>
                     <div class="kino-settings-group">
                         <label for="kino-intro-percent-input">Показывать кнопку обрезки первые (%):</label>
@@ -972,16 +972,16 @@
                         <input type="checkbox" id="kino-auto-skip-outro-toggle" ${SETTINGS.autoSkipOutro ? 'checked' : ''}>
                     </div>
                     <div class="kino-settings-group">
-                        <label for="kino-timer-outro-input">Таймер автопропуска (сек):</label>
-                        <input type="number" id="kino-timer-outro-input" min="1" max="30" value="${SETTINGS.autoSkipTimerOutro}">
-                    </div>
-                    <div class="kino-settings-group">
-                        <label for="kino-enable-outro-toggle">Искать Outro (Анонс / Нач. титры):</label>
+                        <label for="kino-enable-outro-toggle">Пропускать Outro (Анонс/Начальные титры):</label>
                         <input type="checkbox" id="kino-enable-outro-toggle" ${SETTINGS.enableOutro ? 'checked' : ''}>
                     </div>
                     <div class="kino-settings-group">
-                        <label for="kino-enable-credits-toggle">Искать Credits (Титры):</label>
+                        <label for="kino-enable-credits-toggle">Пропускать Credits (Титры):</label>
                         <input type="checkbox" id="kino-enable-credits-toggle" ${SETTINGS.enableCredits ? 'checked' : ''}>
+                    </div>
+                    <div class="kino-settings-group">
+                        <label for="kino-timer-outro-input">Таймер автопропуска (сек):</label>
+                        <input type="number" id="kino-timer-outro-input" min="1" max="30" value="${SETTINGS.autoSkipTimerOutro}">
                     </div>
                     <div class="kino-settings-group">
                         <label for="kino-outro-percent-input">Показывать кнопку обрезки последние (%):</label>
