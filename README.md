@@ -17,6 +17,8 @@
 
 ### 📺 [ПРИЛОЖЕНИЕ ДЛЯ АНДРОИД ТВ](http://github.com/nlarionov/kino-watch-mod)
 
+### 🎥 [Скрипт для поиска коллекции фильмов (сиквелов и приквелов)](https://github.com/vkdsk/kinowatch-collection)
+
 </div>
 
 ---
