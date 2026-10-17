@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kino.watch Skipper
 // @namespace    https://github.com/vkdsk/kinowatch-skipper
-// @version      1.22
+// @version      1.23
 // @description  Пропуск заставок и титров в плеере kino.watch (с поддержкой fallback API)
 // @author       etodsk
 // @match        https://*.kino.watch/*
@@ -611,7 +611,7 @@
 
     // 4. Запрос к "theintrodb"
     async function fetchFromTheIntroDb(imdbId, seInfo, durationMs) {
-        let url = `https://api.theintrodb.org/v3/media?imdb_id=${encodeURIComponent(imdbId)}`;
+        let url = `https://api.theintrodb.org/v4/media?imdb_id=${encodeURIComponent(imdbId)}`;
         if (seInfo.isMovie) {
             if (durationMs > 0) url += `&duration_ms=${durationMs}`;
         } else {
