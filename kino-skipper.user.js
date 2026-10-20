@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kino.watch Skipper
 // @namespace    https://github.com/vkdsk/kinowatch-skipper
-// @version      1.23
+// @version      1.27
 // @description  Пропуск заставок и титров в плеере kino.watch (с поддержкой fallback API)
 // @author       etodsk
 // @match        https://*.kino.watch/*
@@ -98,6 +98,31 @@
             height: 100% !important;
             box-sizing: border-box;
             flex-shrink: 0;
+        }
+        /* свой контекст наложения: z-index кнопок не перекрывает шторку меню сайта */
+        media-player { isolation: isolate; }
+        .kino-skip-floating {
+            position: absolute;
+            right: max(16px, env(safe-area-inset-right, 0px));
+            bottom: 16px; /* точное значение выставляет JS (layoutFloating) */
+            max-width: calc(100% - 32px);
+            display: flex;
+            flex-direction: row;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 6px;
+            z-index: 2147483646;
+            pointer-events: none;
+            transition: bottom 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .kino-skip-floating > * { pointer-events: auto; }
+        @media (max-width: 600px), (max-height: 480px) {
+            .kino-skip-floating .kino-btn-expandable {
+                height: 28px;
+                padding: 4px 8px;
+                font-size: 12px;
+            }
         }
         .kino-btn-expandable {
             display: inline-flex;
@@ -1005,8 +1030,8 @@
         const introPercentInput = overlay.querySelector('#kino-intro-percent-input');
         const autoSkipOutroInput = overlay.querySelector('#kino-auto-skip-outro-toggle');
         const timerOutroInput = overlay.querySelector('#kino-timer-outro-input');
-        const enableOutroInput = overlay.querySelector('#kino-enable-outro-toggle').checked;
-        const enableCreditsInput = overlay.querySelector('#kino-enable-credits-toggle').checked;
+        const enableOutroInput = overlay.querySelector('#kino-enable-outro-toggle');
+        const enableCreditsInput = overlay.querySelector('#kino-enable-credits-toggle');
         const outroPercentInput = overlay.querySelector('#kino-outro-percent-input');
         overlay.querySelector('.kino-modal-confirm').addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1038,6 +1063,7 @@
         const playerBottom = playerElement.querySelector('.player-bottom');
         if (!playerBottom) return;
         if (playerBottom.querySelector('.kino-skip-controls')) return;
+        if (playerElement.querySelector('.kino-skip-floating')) return;
 
         const controlsContainer = document.createElement('div');
         controlsContainer.className = 'kino-skip-controls';
@@ -1090,14 +1116,84 @@
 
         // 2. Вставляем reportBtn сразу после settingsBtn
         controlsContainer.appendChild(settingsBtn);
-        controlsContainer.appendChild(reportBtn);
         controlsContainer.appendChild(stepBackBtn);
         controlsContainer.appendChild(markIntroBtn);
         controlsContainer.appendChild(markOutroBtn);
         controlsContainer.appendChild(stepForwardBtn);
-        controlsContainer.appendChild(cancelAutoSkipBtn);
-        controlsContainer.appendChild(skipBtn);
         playerBottom.prepend(controlsContainer);
+
+        // Кнопки пропуска живут вне панели управления и видны всегда
+        const floating = document.createElement('div');
+        floating.className = 'kino-skip-floating';
+        ['pointerup', 'pointerdown', 'dblclick'].forEach((evt) => {
+            floating.addEventListener(evt, (e) => e.stopPropagation());
+        });
+        floating.appendChild(reportBtn);
+        floating.appendChild(cancelAutoSkipBtn);
+        floating.appendChild(skipBtn);
+        playerElement.appendChild(floating);
+
+        // Адаптивное положение: над панелью, пока она видна, и вниз, когда она скрыта
+        const isShown = (el) => {
+            let opacity = 1;
+            for (let n = el; n && n !== playerElement; n = n.parentElement) {
+                const cs = getComputedStyle(n);
+                if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+                opacity *= parseFloat(cs.opacity);
+            }
+            return opacity > 0.5;
+        };
+
+        const layoutFloating = () => {
+            const pRect = playerElement.getBoundingClientRect();
+            const bRect = playerBottom.getBoundingClientRect();
+            const shown = isShown(playerBottom) && bRect.height > 0 && bRect.top < pRect.bottom - 1;
+            let offset = 16;
+            if (shown) {
+                const cRect = controlsContainer.getBoundingClientRect();
+                const fHeight = floating.offsetHeight || 32;
+                if (cRect.height > 0) {
+                    // центр плавающей группы совпадает с центром ряда кнопки настроек
+                    const centerFromBottom = pRect.bottom - (cRect.top + cRect.height / 2);
+                    offset = Math.max(16, centerFromBottom - fHeight / 2);
+                } else {
+                    offset = Math.max(16, pRect.bottom - bRect.top + 8);
+                }
+            }
+            floating.style.bottom = `${Math.round(offset)}px`;
+        };
+
+        // после события подстраиваемся ещё ~0.6 с, пока идут анимации плеера
+        let kickUntil = 0;
+        let kicking = false;
+        const kickLayout = () => {
+            kickUntil = performance.now() + 600;
+            if (kicking) return;
+            kicking = true;
+            const step = () => {
+                layoutFloating();
+                if (performance.now() < kickUntil) requestAnimationFrame(step);
+                else kicking = false;
+            };
+            requestAnimationFrame(step);
+        };
+
+        ['pointerdown', 'pointerup', 'pointermove', 'touchstart', 'keydown', 'transitionend', 'fullscreenchange', 'webkitfullscreenchange']
+            .forEach((evt) => playerElement.addEventListener(evt, kickLayout, { passive: true }));
+        window.addEventListener('resize', kickLayout);
+        window.addEventListener('orientationchange', kickLayout);
+        document.addEventListener('fullscreenchange', kickLayout);
+
+        const attrObserver = new MutationObserver(kickLayout);
+        [playerElement, playerBottom, playerBottom.parentElement].forEach((el) => {
+            if (el) attrObserver.observe(el, { attributes: true });
+        });
+        if (typeof ResizeObserver !== 'undefined') {
+            const ro = new ResizeObserver(kickLayout);
+            ro.observe(playerElement);
+            ro.observe(playerBottom);
+        }
+        kickLayout();
 
         const progressFill = skipBtn.querySelector('.kino-skip-progress-fill');
         let currentActiveSkipSegment = null;
@@ -1281,7 +1377,12 @@
             handleMarkClick('outro');
         });
 
+        let lastTick = 0;
         const timeHandler = () => {
+            const now = performance.now();
+            if (now - lastTick < 50) return; // отсекаем дубль от двух источников событий
+            lastTick = now;
+            layoutFloating();
             updateMarkBtnsVisibility(playerElement);
             const currentTime = getCurrentVideoTime(playerElement);
             const isInIntro = currentIntro && currentTime >= currentIntro.start_time && currentTime < currentIntro.end_time;
@@ -1345,6 +1446,8 @@
         const newMediaId = getActiveMediaId();
         if (newMediaId && newMediaId !== currentMediaId) {
             currentMediaId = newMediaId;
+            currentIntro = null;
+            currentOutro = null;
             canSubmitIntro = false;
             canSubmitOutro = false;
             fetchSegments(currentMediaId, player);
@@ -1352,7 +1455,15 @@
         createUI(player);
     }
 
-    const observer = new MutationObserver(() => init());
+    let initScheduled = false;
+    const observer = new MutationObserver(() => {
+        if (initScheduled) return;
+        initScheduled = true;
+        requestAnimationFrame(() => {
+            initScheduled = false;
+            init();
+        });
+    });
     observer.observe(document.body, { childList: true, subtree: true });
     init();
 })();
