@@ -8,7 +8,7 @@
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-Supported-052e40?style=for-the-badge&logo=tampermonkey)](https://www.tampermonkey.net/)
 [![Violentmonkey](https://img.shields.io/badge/Violentmonkey-Supported-3273dc?style=for-the-badge)](https://violentmonkey.github.io/)
-[![Version](https://img.shields.io/badge/version-1.23-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
+[![Version](https://img.shields.io/badge/version-1.27-green.svg?style=for-the-badge)](https://kw.xlnt.ovh/kino-skipper.user.js)
 
 <br />
 
@@ -130,10 +130,9 @@
 
 ---
 
-## 📋 ToDo (задачки со звёздочкой)
+## 📋 ToDo
 
-* **Кнопки:** Сделать кнопки "пропустить заставку/титры" и "отменить пропуск" всегда активными, а не скрывать вместе со скрытием интерфейса плеера.
-* **Настройки:** Добавить выбор скрывать кнопки "пропустить заставку/титры" и "отменить пропуск" вместе с интерфейсом плеера или нет.
+* Всё готово
 
 ---
 
