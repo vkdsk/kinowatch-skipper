@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Kino.watch Skipper
 // @namespace    https://github.com/vkdsk/kinowatch-skipper
-// @version      1.27
+// @version      1.30
 // @description  Пропуск заставок и титров в плеере kino.watch (с поддержкой fallback API)
 // @author       etodsk
 // @match        https://*.kino.watch/*
@@ -44,6 +44,24 @@
             GM_setValue('enableOutro', Boolean(val));
         },
 
+        get enableUndo() {
+            return GM_getValue('enableUndo', true);
+        },
+        set enableUndo(val) {
+            GM_setValue('enableUndo', Boolean(val));
+        },
+        get undoTimer() {
+            return GM_getValue('undoTimer', 7);
+        },
+        set undoTimer(val) {
+            GM_setValue('undoTimer', Math.min(60, Math.max(1, parseInt(val, 10) || 7)));
+        },
+        get enableSmartDetect() {
+            return GM_getValue('enableSmartDetect', true);
+        },
+        set enableSmartDetect(val) {
+            GM_setValue('enableSmartDetect', Boolean(val));
+        },
         get enableCredits() {
             return GM_getValue('enableCredits', true);
         },
@@ -189,6 +207,29 @@
         }
         .kino-skip-btn:hover {
             transform: scale(1.03);
+        }
+        .kino-undo-btn {
+            position: relative;
+            background: #b86e00;
+            padding: 6px 12px;
+        }
+        .kino-undo-btn .btn-text {
+            max-width: 220px !important;
+            opacity: 1 !important;
+            margin-left: 6px !important;
+        }
+        .kino-undo-btn:hover {
+            transform: scale(1.03);
+        }
+        .kino-undo-fill {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #e08a00 0%, #f0a830 100%);
+            border-radius: 6px;
+            z-index: 0;
         }
         .kino-cancel-autoskip-btn {
             background: #6c757d;
@@ -386,6 +427,7 @@
     let markStartTime = null;
     let activeMarkingType = null;
     let isAutoSkipCancelled = false;
+    let renderMarkersHook = null; // выставляется в createUI
 
     // Вспомогательные функции отправки запросов с таймаутом
     function sendApiRequest(url, options = {}) {
@@ -722,6 +764,315 @@
         return match ? md5(match[1]) : null;
     }
 
+
+    // ---------------------------------------------------------------
+    // Умное определение заставки/титров по субтитрам (запасной вариант,
+    // когда ни одна база сегмент не отдала). Субтитры скачиваются напрямую
+    // из <track src="...m3u8"> (HLS-сегменты WebVTT с абсолютными таймкодами).
+    // ---------------------------------------------------------------
+    const SMART = { INTRO_LIMIT: 360, INTRO_MIN: 15, INTRO_MAX: 150, CREDITS_MIN_GAP: 30, CREDITS_ZONE: 600 };
+    const SMART_CACHE_KEY = 'smartDetectCache';
+    const SMART_CACHE_TTL = 30 * 24 * 3600 * 1000;
+    let smartToken = 0;
+
+    // cues: [{start, end}], duration в секундах. Возвращает { intro, credits } (секунды) или null-поля.
+    // SMART-FIND-START
+    function findSegmentsByCues(cues, duration) {
+        cues = cues.slice().sort((a, b) => a.start - b.start);
+        const out = { intro: null, credits: null };
+        if (cues.length < 5) return out;
+
+        // (а) первая реплика через 15–150 с: всё до неё заставка
+        let longest = 0;
+        if (cues[0].start >= SMART.INTRO_MIN && cues[0].start <= SMART.INTRO_MAX) {
+            longest = cues[0].start;
+            out.intro = { start_time: 0, end_time: Math.round(cues[0].start) };
+        }
+        // (б) самая длинная пауза 15–150 с в первых 6 минутах
+        for (let i = 0; i < cues.length - 1; i++) {
+            if (cues[i].end > SMART.INTRO_LIMIT) break;
+            const gs = cues[i].end;
+            const ge = cues[i + 1].start;
+            const gap = ge - gs;
+            if (gap >= SMART.INTRO_MIN && gap <= SMART.INTRO_MAX && gap > longest) {
+                longest = gap;
+                out.intro = { start_time: Math.round(gs), end_time: Math.round(ge) };
+            }
+        }
+
+        // (в) титры: только для серий длиннее 10 минут и только если субтитры
+        // загружены почти до конца (иначе «тишина» — это просто не загруженная часть)
+        if (duration > 600) {
+            const last = cues[cues.length - 1];
+            const coverageOk = last.end >= duration - SMART.CREDITS_ZONE;
+            if (coverageOk) {
+                const tail = duration - last.end;
+                let best = null;
+                let bestLen = 0;
+                if (tail >= SMART.CREDITS_MIN_GAP && tail <= SMART.CREDITS_ZONE) {
+                    best = { start_time: Math.round(last.end), end_time: Math.round(duration) };
+                    bestLen = tail;
+                }
+                const from = duration - SMART.CREDITS_ZONE;
+                for (let j = 0; j < cues.length - 1; j++) {
+                    if (cues[j].end < from) continue;
+                    const len = cues[j + 1].start - cues[j].end;
+                    if (len >= SMART.CREDITS_MIN_GAP && len > bestLen) {
+                        bestLen = len;
+                        best = { start_time: Math.round(cues[j].end), end_time: Math.round(cues[j + 1].start) };
+                    }
+                }
+                out.credits = best;
+            }
+        }
+        return out;
+    }
+    // SMART-FIND-END
+
+    // SMART-LOAD-START
+    function fetchText(url, timeout = 15000) {
+        return fetch(url)
+            .then((r) => {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.text();
+            })
+            .catch(() => new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url,
+                    timeout,
+                    onload: (r) => (r.status >= 200 && r.status < 300 ? resolve(r.responseText) : reject(new Error('HTTP ' + r.status))),
+                    onerror: () => reject(new Error('network')),
+                    ontimeout: () => reject(new Error('timeout'))
+                });
+            }));
+    }
+
+    function parseVttTime(str) {
+        const parts = str.trim().split(':');
+        if (parts.length === 3) return parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseFloat(parts[2]);
+        return parseInt(parts[0], 10) * 60 + parseFloat(parts[1]);
+    }
+
+    function parseVttCues(text) {
+        const cues = [];
+        const re = /(\d{1,2}:\d{2}(?::\d{2})?\.\d{3})\s*-->\s*(\d{1,2}:\d{2}(?::\d{2})?\.\d{3})/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+            const s = parseVttTime(m[1]);
+            const e = parseVttTime(m[2]);
+            if (e > s) cues.push({ start: s, end: e });
+        }
+        return cues;
+    }
+
+    // Скачивает дорожку субтитров. Из плейлиста берутся только сегменты, перекрывающие
+    // начало серии (поиск заставки) и последние 10 минут (поиск титров).
+    async function loadSubtitleCues(playerElement, durationHint) {
+        const video = playerElement.querySelector('video');
+        if (!video) return null;
+        const els = Array.from(video.querySelectorAll('track[src]'))
+            .filter((el) => !el.kind || /subtitles|captions/i.test(el.kind));
+        if (!els.length) return null;
+        const ru = els.find((el) => /рус|russian|^ru/i.test(`${el.label || ''} ${el.srclang || ''}`));
+        const el = ru || els[0];
+        const url = new URL(el.getAttribute('src'), location.href).href;
+
+        const body = await fetchText(url);
+        if (/^\s*WEBVTT/.test(body)) return { cues: parseVttCues(body) };
+
+        const segs = [];
+        let t = 0;
+        let dur = 0;
+        for (const raw of body.split('\n')) {
+            const line = raw.trim();
+            if (line.startsWith('#EXTINF:')) {
+                dur = parseFloat(line.slice(8)) || 0;
+            } else if (line && !line.startsWith('#')) {
+                segs.push({ url: new URL(line, url).href, start: t, end: t + dur });
+                t += dur;
+                dur = 0;
+            }
+        }
+        if (!segs.length) return null;
+
+        const duration = durationHint > 0 ? durationHint : t;
+        let wanted = segs;
+        if (t > 0) {
+            wanted = segs.filter((s) => s.start < SMART.INTRO_LIMIT + 60 || s.end > duration - SMART.CREDITS_ZONE - 60);
+        }
+        wanted = wanted.slice(0, 300);
+
+        const cues = [];
+        for (let i = 0; i < wanted.length; i += 5) {
+            const chunk = wanted.slice(i, i + 5);
+            const results = await Promise.all(chunk.map((s) => fetchText(s.url).then(parseVttCues).catch(() => [])));
+            results.forEach((r) => cues.push(...r));
+        }
+        cues.sort((a, b) => a.start - b.start || a.end - b.end);
+        return cues.length ? { cues } : null;
+    }
+    // SMART-LOAD-END
+
+    // запасной путь: реплики, которые плеер уже загрузил сам (могут быть неполными)
+    function collectSubtitleCues(playerElement) {
+        const lists = [];
+        try { if (playerElement.textTracks) lists.push(playerElement.textTracks); } catch (e) { /* ignore */ }
+        const video = playerElement.querySelector('video');
+        try { if (video && video.textTracks) lists.push(video.textTracks); } catch (e) { /* ignore */ }
+
+        let best = null;
+        for (const list of lists) {
+            let tracks = [];
+            try {
+                tracks = typeof list.toArray === 'function' ? list.toArray() : Array.from(list);
+            } catch (e) { continue; }
+            for (const track of tracks) {
+                if (track.kind && track.kind !== 'subtitles' && track.kind !== 'captions') continue;
+                let cues;
+                try { cues = Array.from(track.cues || []); } catch (e) { continue; }
+                if (cues.length > 5 && (!best || cues.length > best.length)) best = cues;
+            }
+        }
+        return best ? best.map((c) => ({ start: c.startTime, end: c.endTime })) : null;
+    }
+
+    const smartKey = (type) => (type === 'outro' ? 'credits' : 'intro');
+
+    function smartCacheGet(mediaId) {
+        const all = GM_getValue(SMART_CACHE_KEY, {}) || {};
+        const r = all[mediaId];
+        if (!r || Date.now() - r.ts > SMART_CACHE_TTL) return null;
+        return r;
+    }
+
+    function smartCacheSet(mediaId, intro, credits) {
+        const all = GM_getValue(SMART_CACHE_KEY, {}) || {};
+        const now = Date.now();
+        Object.keys(all).forEach((k) => { if (now - all[k].ts > SMART_CACHE_TTL) delete all[k]; });
+        const prev = all[mediaId] || {};
+        all[mediaId] = {
+            intro: intro || prev.intro || null,
+            credits: credits || prev.credits || null,
+            rejected: prev.rejected || {},
+            ts: now
+        };
+        GM_setValue(SMART_CACHE_KEY, all);
+    }
+
+    // пользователь нажал «Вернуться»: сегмент забываем и больше не предлагаем
+    function smartCacheReject(mediaId, type) {
+        const all = GM_getValue(SMART_CACHE_KEY, {}) || {};
+        const key = smartKey(type);
+        const prev = all[mediaId] || {};
+        all[mediaId] = {
+            intro: prev.intro || null,
+            credits: prev.credits || null,
+            rejected: { ...(prev.rejected || {}), [key]: true },
+            ts: Date.now()
+        };
+        all[mediaId][key] = null;
+        GM_setValue(SMART_CACHE_KEY, all);
+    }
+
+    function applySmartSegments(mediaId, intro, credits, playerElement) {
+        if (mediaId !== currentMediaId) return;
+        if (intro && !currentIntro) currentIntro = { ...intro, api_source: 'subs' };
+        if (credits && !currentOutro) currentOutro = { ...credits, api_source: 'subs' };
+        updateMarkBtnsVisibility(playerElement);
+    }
+
+    // Отправка в базу сегмента, определённого по субтитрам и не отклонённого пользователем
+    async function submitSmartSegment(type, seg, mediaId, playerElement) {
+        const isOutro = type === 'outro';
+        if (mediaId !== currentMediaId) return;
+        if (!(isOutro ? canSubmitOutro : canSubmitIntro)) return;
+        const length = seg.end_time - seg.start_time;
+        const maxDuration = isOutro ? 900 : 300;
+        if (!isFinite(length) || length < 10 || length > maxDuration) return;
+        if (!currentUsername) currentUsername = getWatchlistUsername();
+        if (!currentUsername) return;
+
+        if (isOutro) canSubmitOutro = false;
+        else canSubmitIntro = false;
+
+        try {
+            const payload = {
+                media_id: String(mediaId),
+                page_url: window.location.href,
+                username: String(currentUsername),
+                start_time: Number(seg.start_time.toFixed(2)),
+                end_time: Number(seg.end_time.toFixed(2))
+            };
+            if (isOutro) payload.outro = true;
+            await sendApiRequest(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        } catch (err) {
+            console.log('[Kino Skip] Не удалось отправить сегмент из субтитров:', err);
+        }
+        updateMarkBtnsVisibility(playerElement);
+    }
+
+    function startSmartDetect(mediaId, playerElement) {
+        const token = ++smartToken;
+        const deadline = Date.now() + 10 * 60 * 1000;
+        let fetchFailed = false;
+
+        const cached = smartCacheGet(mediaId);
+        const rejected = (cached && cached.rejected) || {};
+        if (cached) {
+            applySmartSegments(
+                mediaId,
+                rejected.intro ? null : cached.intro,
+                rejected.credits ? null : cached.credits,
+                playerElement
+            );
+        }
+
+        const needIntro = () => !currentIntro && SETTINGS.enableIntro && !rejected.intro;
+        const needCredits = () => !currentOutro && SETTINGS.enableCredits && !rejected.credits;
+
+        const poll = async () => {
+            if (token !== smartToken || mediaId !== currentMediaId || !SETTINGS.enableSmartDetect) return;
+            if (Date.now() > deadline || (!needIntro() && !needCredits())) return;
+
+            const durationMs = await getVideoDurationMs(playerElement);
+            if (token !== smartToken || mediaId !== currentMediaId) return;
+            if (!durationMs) { setTimeout(poll, 5000); return; }
+            const duration = durationMs / 1000;
+
+            let cues = null;
+            let complete = false;
+            if (!fetchFailed) {
+                try {
+                    const res = await loadSubtitleCues(playerElement, duration);
+                    if (res) { cues = res.cues; complete = true; }
+                } catch (e) {
+                    fetchFailed = true;
+                    console.log('[Kino Skip] Не удалось скачать субтитры:', e);
+                }
+            }
+            if (!cues) cues = collectSubtitleCues(playerElement);
+            if (token !== smartToken || mediaId !== currentMediaId) return;
+
+            if (cues) {
+                const found = findSegmentsByCues(cues, duration);
+                const intro = needIntro() ? found.intro : null;
+                const credits = needCredits() ? found.credits : null;
+                if (intro || credits) {
+                    applySmartSegments(mediaId, intro, credits, playerElement);
+                    smartCacheSet(mediaId, intro, credits);
+                }
+                if (complete) return; // дорожка скачана целиком, повторять незачем
+            }
+            setTimeout(poll, 5000);
+        };
+        setTimeout(poll, 3000);
+    }
+
     // Цепочка получение сегментов
     async function fetchSegments(mediaId, playerElement) {
         isAutoSkipCancelled = false;
@@ -801,11 +1152,17 @@
             canSubmitOutro = false;
         }
 
+        // базы ничего не дали: пробуем определить по субтитрам
+        if ((!currentIntro || !currentOutro) && SETTINGS.enableSmartDetect) {
+            startSmartDetect(mediaId, playerElement);
+        }
+
         updateMarkBtnsVisibility(playerElement);
     }
 
     function updateMarkBtnsVisibility(playerElement) {
         if (!playerElement) return;
+        if (renderMarkersHook) renderMarkersHook();
         const markIntroBtn = playerElement.querySelector('.kino-mark-intro-btn');
         const markOutroBtn = playerElement.querySelector('.kino-mark-outro-btn');
         const stepBackBtn = playerElement.querySelector('.kino-step-btn-back');
@@ -1012,6 +1369,22 @@
                         <label for="kino-outro-percent-input">Показывать кнопку обрезки последние (%):</label>
                         <input type="number" id="kino-outro-percent-input" min="1" max="100" value="${SETTINGS.outroShowPercent}">
                     </div>
+
+                    <div class="kino-settings-section-title">Возврат после пропуска</div>
+                    <div class="kino-settings-group">
+                        <label for="kino-undo-toggle">Показывать кнопку «Вернуться»:</label>
+                        <input type="checkbox" id="kino-undo-toggle" ${SETTINGS.enableUndo ? 'checked' : ''}>
+                    </div>
+                    <div class="kino-settings-group">
+                        <label for="kino-undo-timer-input">Сколько секунд показывать кнопку:</label>
+                        <input type="number" id="kino-undo-timer-input" min="1" max="60" value="${SETTINGS.undoTimer}">
+                    </div>
+
+                    <div class="kino-settings-section-title">Запасной режим</div>
+                    <div class="kino-settings-group">
+                        <label for="kino-smart-detect-toggle">Определять по субтитрам, если базы пусты:</label>
+                        <input type="checkbox" id="kino-smart-detect-toggle" ${SETTINGS.enableSmartDetect ? 'checked' : ''}>
+                    </div>
                 </div>
 
                 <div class="kino-skip-modal-actions">
@@ -1033,6 +1406,9 @@
         const enableOutroInput = overlay.querySelector('#kino-enable-outro-toggle');
         const enableCreditsInput = overlay.querySelector('#kino-enable-credits-toggle');
         const outroPercentInput = overlay.querySelector('#kino-outro-percent-input');
+        const smartDetectInput = overlay.querySelector('#kino-smart-detect-toggle');
+        const undoInput = overlay.querySelector('#kino-undo-toggle');
+        const undoTimerInput = overlay.querySelector('#kino-undo-timer-input');
         overlay.querySelector('.kino-modal-confirm').addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -1047,6 +1423,9 @@
             SETTINGS.enableOutro = enableOutroInput.checked;
             SETTINGS.enableCredits = enableCreditsInput.checked;
             SETTINGS.outroShowPercent = outroPercentInput.value;
+            SETTINGS.enableSmartDetect = smartDetectInput.checked;
+            SETTINGS.enableUndo = undoInput.checked;
+            SETTINGS.undoTimer = undoTimerInput.value;
             updateMarkBtnsVisibility(playerElement);
             showToast(playerElement, 'Настройки сохранены!', 'success');
             overlay.remove();
@@ -1120,6 +1499,16 @@
         controlsContainer.appendChild(markIntroBtn);
         controlsContainer.appendChild(markOutroBtn);
         controlsContainer.appendChild(stepForwardBtn);
+        const undoBtn = document.createElement('button');
+        undoBtn.className = 'kino-btn-expandable kino-undo-btn';
+        undoBtn.style.display = 'none';
+        undoBtn.innerHTML = `
+            <div class="kino-undo-fill"></div>
+            <span class="btn-icon">↶</span>
+            <span class="btn-text">Вернуться</span>
+        `;
+        const undoFill = undoBtn.querySelector('.kino-undo-fill');
+
         playerBottom.prepend(controlsContainer);
 
         // Кнопки пропуска живут вне панели управления и видны всегда
@@ -1131,6 +1520,7 @@
         floating.appendChild(reportBtn);
         floating.appendChild(cancelAutoSkipBtn);
         floating.appendChild(skipBtn);
+        floating.appendChild(undoBtn);
         playerElement.appendChild(floating);
 
         // Адаптивное положение: над панелью, пока она видна, и вниз, когда она скрыта
@@ -1144,7 +1534,61 @@
             return opacity > 0.5;
         };
 
+        // Окрашивание сегментов (заставка/титры) на полосе прогресса
+        const segMarkers = {};
+        const renderSegmentMarkers = () => {
+            const track = playerElement.querySelector('.vds-slider-track-container .track');
+            const parent = track && track.parentElement;
+            const nativeVideo = playerElement.querySelector('video');
+            let dur = nativeVideo && isFinite(nativeVideo.duration) ? nativeVideo.duration : 0;
+            if (!dur && isFinite(playerElement.duration)) dur = playerElement.duration;
+
+            ['intro', 'outro'].forEach((type) => {
+                const seg = type === 'intro' ? currentIntro : currentOutro;
+                let el = segMarkers[type];
+                const tw = track ? track.offsetWidth : 0;
+                if (!parent || !seg || !(dur > 0) || !(tw > 0)) {
+                    if (el && el.style.display !== 'none') el.style.display = 'none';
+                    return;
+                }
+                const start = Math.max(0, seg.start_time);
+                const end = Math.min(dur, isFinite(seg.end_time) ? seg.end_time : dur);
+                if (!(end > start)) {
+                    if (el && el.style.display !== 'none') el.style.display = 'none';
+                    return;
+                }
+                if (!el || !el.isConnected) {
+                    el = document.createElement('div');
+                    el.className = 'kino-seg-marker';
+                    segMarkers[type] = el;
+                    parent.appendChild(el);
+                }
+                const left = track.offsetLeft + (start / dur) * tw;
+                const width = ((end - start) / dur) * tw;
+                const key = [left.toFixed(1), width.toFixed(1), track.offsetTop, track.offsetHeight].join('|');
+                if (el.dataset.key === key && el.style.display === 'block') return;
+                el.dataset.key = key;
+                el.style.cssText = [
+                    'position:absolute',
+                    `left:${left}px`,
+                    `width:${width}px`,
+                    `top:${track.offsetTop}px`,
+                    `height:${track.offsetHeight}px`,
+                    'background:rgba(224,138,0,0.9)',
+                    `border-radius:${getComputedStyle(track).borderRadius || '0'}`,
+                    'pointer-events:none',
+                    'z-index:2',
+                    'display:block'
+                ].join(';');
+            });
+        };
+        renderMarkersHook = renderSegmentMarkers;
+
+        const markBtns = [markIntroBtn, markOutroBtn, stepBackBtn, stepForwardBtn];
+        const isMarkRowBusy = () => markBtns.some((b) => b.style.display && b.style.display !== 'none');
+
         const layoutFloating = () => {
+            renderSegmentMarkers();
             const pRect = playerElement.getBoundingClientRect();
             const bRect = playerBottom.getBoundingClientRect();
             const shown = isShown(playerBottom) && bRect.height > 0 && bRect.top < pRect.bottom - 1;
@@ -1152,7 +1596,10 @@
             if (shown) {
                 const cRect = controlsContainer.getBoundingClientRect();
                 const fHeight = floating.offsetHeight || 32;
-                if (cRect.height > 0) {
+                if (cRect.height > 0 && isMarkRowBusy()) {
+                    // в ряду настроек показаны кнопки обрезки или ±1s: встаём над ними
+                    offset = Math.max(16, pRect.bottom - cRect.top + 8);
+                } else if (cRect.height > 0) {
                     // центр плавающей группы совпадает с центром ряда кнопки настроек
                     const centerFromBottom = pRect.bottom - (cRect.top + cRect.height / 2);
                     offset = Math.max(16, centerFromBottom - fHeight / 2);
@@ -1188,6 +1635,16 @@
         [playerElement, playerBottom, playerBottom.parentElement].forEach((el) => {
             if (el) attrObserver.observe(el, { attributes: true });
         });
+        // кнопки обрезки/±1s появляются и исчезают: пересчитать положение группы
+        let lastMarkRowBusy = null;
+        const markRowObserver = new MutationObserver(() => {
+            const busy = isMarkRowBusy();
+            if (busy !== lastMarkRowBusy) {
+                lastMarkRowBusy = busy;
+                kickLayout();
+            }
+        });
+        markRowObserver.observe(controlsContainer, { attributes: true, subtree: true, attributeFilter: ['style'] });
         if (typeof ResizeObserver !== 'undefined') {
             const ro = new ResizeObserver(kickLayout);
             ro.observe(playerElement);
@@ -1198,16 +1655,88 @@
         const progressFill = skipBtn.querySelector('.kino-skip-progress-fill');
         let currentActiveSkipSegment = null;
 
+        // --- окно «Вернуться» после пропуска ---
+        let undoState = null; // { type, seg, fromTime, mediaId, at, timer }
+
+        const hideUndoUi = () => {
+            undoBtn.style.display = 'none';
+            undoFill.style.transition = 'none';
+            undoFill.style.width = '0%';
+        };
+
+        // Окно закрылось без возврата: сегмент подтверждён, сегменты из субтитров уходят в базу
+        const finalizeUndoWindow = () => {
+            const st = undoState;
+            if (!st) return;
+            clearTimeout(st.timer);
+            undoState = null;
+            hideUndoUi();
+            if (st.seg.api_source === 'subs' && !st.seg.rejected) {
+                submitSmartSegment(st.type, st.seg, st.mediaId, playerElement);
+            }
+        };
+
+        // Пользователь вернулся (кнопкой или перемоткой): сегмент не подтверждён, в базу не пишем
+        const rejectUndoWindow = (doSeek) => {
+            const st = undoState;
+            if (!st) return;
+            clearTimeout(st.timer);
+            undoState = null;
+            hideUndoUi();
+            if (st.seg.api_source === 'subs') {
+                st.seg.rejected = true;
+                smartCacheReject(st.mediaId, st.type);
+            }
+            isAutoSkipCancelled = true; // не пропускать этот сегмент повторно автоматически
+            if (doSeek) seekTo(playerElement, st.fromTime);
+        };
+
+        const discardUndoWindow = () => {
+            if (!undoState) return;
+            clearTimeout(undoState.timer);
+            undoState = null;
+            hideUndoUi();
+        };
+
+        const beginUndoWindow = (type, seg, fromTime) => {
+            if (undoState) finalizeUndoWindow();
+            const ms = SETTINGS.undoTimer * 1000;
+            undoState = {
+                type,
+                seg,
+                fromTime,
+                mediaId: currentMediaId,
+                at: performance.now(),
+                timer: setTimeout(finalizeUndoWindow, ms)
+            };
+            if (SETTINGS.enableUndo) {
+                undoBtn.style.display = 'inline-flex';
+                undoFill.style.transition = 'none';
+                undoFill.style.width = '100%';
+                void undoFill.offsetWidth;
+                undoFill.style.transition = `width ${ms}ms linear`;
+                undoFill.style.width = '0%';
+            }
+        };
+
         const executeSkip = () => {
-            if (currentActiveSkipSegment === 'intro' && currentIntro) {
-                seekTo(playerElement, currentIntro.end_time);
-            } else if (currentActiveSkipSegment === 'outro' && currentOutro) {
-                seekTo(playerElement, currentOutro.end_time);
+            const type = currentActiveSkipSegment;
+            const seg = type === 'intro' ? currentIntro : type === 'outro' ? currentOutro : null;
+            if (seg) {
+                const fromTime = getCurrentVideoTime(playerElement);
+                seekTo(playerElement, seg.end_time);
+                beginUndoWindow(type, seg, fromTime);
             }
             skipBtn.style.display = 'none';
             cancelAutoSkipBtn.style.display = 'none';
             reportBtn.style.display = 'none';
         };
+
+        undoBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            rejectUndoWindow(true);
+        });
 
         const resetMarkingState = () => {
             markStartTime = null;
@@ -1383,6 +1912,17 @@
             if (now - lastTick < 50) return; // отсекаем дубль от двух источников событий
             lastTick = now;
             layoutFloating();
+            if (undoState) {
+                if (undoState.mediaId !== currentMediaId) {
+                    discardUndoWindow();
+                } else if (now - undoState.at > 1500) {
+                    // ручная перемотка обратно в сегмент тоже считается возвратом
+                    const ct = getCurrentVideoTime(playerElement);
+                    if (ct >= undoState.seg.start_time && ct < undoState.seg.end_time - 1) {
+                        rejectUndoWindow(false);
+                    }
+                }
+            }
             updateMarkBtnsVisibility(playerElement);
             const currentTime = getCurrentVideoTime(playerElement);
             const isInIntro = currentIntro && currentTime >= currentIntro.start_time && currentTime < currentIntro.end_time;
@@ -1391,9 +1931,11 @@
             if (isInIntro || isInOutro) {
                 currentActiveSkipSegment = isInIntro ? 'intro' : 'outro';
 
-                // Показываем кнопку "Жалоба" при нахождении в сегменте
-                if (reportBtn.style.display !== 'inline-flex') {
-                    reportBtn.style.display = 'inline-flex';
+                // Кнопка "Жалоба" в сегменте (для сегментов, найденных по субтитрам, не нужна)
+                const segForReport = isInIntro ? currentIntro : currentOutro;
+                const reportDisplay = segForReport.api_source === 'subs' ? 'none' : 'inline-flex';
+                if (reportBtn.style.display !== reportDisplay) {
+                    reportBtn.style.display = reportDisplay;
                 }
 
                 const skipLabel = playerElement.querySelector('#kino-skip-btn-label');
